@@ -6,7 +6,7 @@ import { v2 as cloudinary } from "cloudinary";
 import clientPromise from "@/lib/mongodb";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-export const runtime = "nodejs";
+ 
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -18,6 +18,9 @@ const COLLECTIONS = {
   clinic: "clinics",
   saloon: "saloons",
   "beauty-parlour": "parlours",
+  diagnostic:"diagnostic",
+  "diagnostic-centre": "diagnostic",
+
 };
 
 export async function POST(request) {

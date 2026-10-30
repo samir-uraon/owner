@@ -90,6 +90,8 @@ async function fetchOwnerBusinesses(cacheKey, { force = false } = {}) {
     });
 
     const result = await response.json();
+     
+    
 
     if (!response.ok) {
       throw new Error(
@@ -260,10 +262,10 @@ useEffect(() => {
       <Image
         src="/logo.png"
         alt="Zeric"
-        width={42}
-        height={42}
+        width={35}
+        height={35}
         priority
-        className="h-9 w-9 shrink-0 rounded-lg object-contain sm:h-12 sm:w-12 sm:rounded-xl"
+        className="h-9 w-9 shrink-0 rounded-lg object-contain sm:h-10 sm:w-10 sm:rounded-xl"
       />
 
       <span className="truncate text-lg font-extrabold tracking-tight text-slate-900 sm:text-xl">

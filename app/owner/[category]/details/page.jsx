@@ -51,28 +51,28 @@ const categories = {
     title: "Clinic Details",
     description: "Add your clinic information and services.",
     businessLabel: "Clinic Name",
-    servicesPlaceholder: "e.g. General Consultation",
+ 
     nextRoute: "/owner/setup/clinic",
   },
   saloon: {
     title: "Salon Details",
     description: "Add your salon information and services.",
     businessLabel: "Salon Name",
-    servicesPlaceholder: "e.g. Haircut",
+   
     nextRoute: "/owner/setup/saloon",
   },
   "beauty-parlour": {
     title: "Beauty Parlour Details",
     description: "Add your beauty parlour information and services.",
     businessLabel: "Beauty Parlour Name",
-    servicesPlaceholder: "e.g. Facial",
+ 
     nextRoute: "/owner/setup/beauty-parlour",
   },
   "diagnostic-centre": {
     title: "Diagnostic Centre Details",
     description: "Add your diagnostic centre information and services.",
     businessLabel: "Diagnostic Centre Name",
-    servicesPlaceholder: "e.g. Blood Test",
+ 
     nextRoute: "/owner/setup/diagnostic-centre",
   },
 };
@@ -98,8 +98,6 @@ function BusinessDetailsForm() {
   const ownerName = session?.user?.name || "";
   const role = String(session?.user?.role || "").toLowerCase();
 
-  const [serviceCharge, setServiceCharge] = useState("");
-  const [serviceInput, setServiceInput] = useState("");
   const [showMapPicker, setShowMapPicker] = useState(false);
 
   const [form, setForm] = useState({
@@ -108,7 +106,7 @@ function BusinessDetailsForm() {
     address: "",
     city: "",
     pincode: "",
-    services: [],
+   
     latitude: 22.5726,
     longitude: 88.3639,
   });
@@ -184,59 +182,9 @@ const [locationSelected, setLocationSelected] = useState(false);
     setError("");
   }, []);
 
-  const addService = useCallback(() => {
-    const name = serviceInput.trim();
-    const chargeText = serviceCharge.trim();
-    const charge = Number(chargeText);
+   
 
-    if (!name) {
-      setError("Enter a service name.");
-      return;
-    }
-
-    if (
-      !chargeText ||
-      !Number.isFinite(charge) ||
-      charge < 0
-    ) {
-      setError("Enter a valid service charge.");
-      return;
-    }
-
-    if (
-      form.services.some(
-        (service) =>
-          service.name.toLowerCase() === name.toLowerCase()
-      )
-    ) {
-      setError("This service has already been added.");
-      return;
-    }
-
-    setForm((previous) => ({
-      ...previous,
-      services: [
-        ...previous.services,
-        {
-          name,
-          charge,
-        },
-      ],
-    }));
-
-    setServiceInput("");
-    setServiceCharge("");
-    setError("");
-  }, [serviceInput, serviceCharge, form.services]);
-
-  const removeService = useCallback((name) => {
-    setForm((previous) => ({
-      ...previous,
-      services: previous.services.filter(
-        (service) => service.name !== name
-      ),
-    }));
-  }, []);
+ 
 
   const searchAddressOnMap = useCallback(async () => {
     const query = addressSearch.trim();
@@ -427,10 +375,7 @@ const handleMapChange = useCallback((location) => {
         return;
       }
 
-      if (!form.services.length) {
-        setError("Add at least one service.");
-        return;
-      }
+     
 
     if (
   !locationSelected ||
@@ -473,10 +418,7 @@ const handleMapChange = useCallback((location) => {
           pincode,
           lat: Number(form.latitude),
           lng: Number(form.longitude),
-          services: form.services.map((service) => ({
-            name: service.name.trim(),
-            charge: Number(service.charge),
-          })),
+        
           category: categoryId,
           categoryName: category.title,
         };
@@ -644,8 +586,10 @@ const handleMapChange = useCallback((location) => {
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-500">
                 2
               </span>
-
-        
+  <span className="h-1 flex-1 rounded-full bg-indigo-200" />
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-500">
+                3
+              </span>
 
             </div>
           </div>
@@ -893,107 +837,7 @@ const handleMapChange = useCallback((location) => {
               </div>
             </section>
 
-            <section>
-              <h2 className="flex items-center gap-2 text-base font-bold text-slate-900">
-                <IndianRupee
-                  size={19}
-                  className="text-indigo-600"
-                />
-                Services offered
-              </h2>
-
-              <p className="mt-1 text-sm text-slate-500">
-                Add each service with its individual charge.
-              </p>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
-                <input
-                  value={serviceInput}
-                  onChange={(e) => setServiceInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addService();
-                    }
-                  }}
-                  placeholder={category.servicesPlaceholder}
-                  aria-label="Service name"
-                  maxLength={100}
-                  className="min-w-0 rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
-                />
-
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={serviceCharge}
-                  onChange={(e) =>
-                    setServiceCharge(e.target.value)
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addService();
-                    }
-                  }}
-                  placeholder="Charge (₹)"
-                  aria-label="Service charge in rupees"
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
-                />
-
-                <button
-                  type="button"
-                  onClick={addService}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
-                >
-                  <Plus size={18} />
-                  Add
-                </button>
-              </div>
-
-              {form.services.length > 0 ? (
-                <div className="mt-4 flex flex-col gap-2">
-                  {form.services.map((service) => (
-                    <div
-                      key={service.name.toLowerCase()}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3"
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-indigo-600">
-                          <CheckCircle2 size={18} />
-                        </div>
-
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-indigo-900">
-                            {service.name}
-                          </p>
-
-                          <p className="mt-1 text-sm font-semibold text-indigo-700">
-                            ₹
-                            {service.charge.toLocaleString("en-IN", {
-                              maximumFractionDigits: 2,
-                            })}
-                          </p>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => removeService(service.name)}
-                        aria-label={`Remove ${service.name}`}
-                        className="shrink-0 rounded-full p-2 text-slate-500 transition hover:bg-red-50 hover:text-red-600"
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-3 rounded-xl border border-dashed border-slate-200 px-4 py-5 text-center text-sm text-slate-400">
-                  No services added yet.
-                </p>
-              )}
-            </section>
+           
 
             <section>
               <div className="mb-4">

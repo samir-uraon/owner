@@ -498,6 +498,36 @@ export default function AuthContainer({
               </button>
             </div>
           )}
+            <div className="flex items-start gap-2">
+  <input
+    type="checkbox"
+    required
+    name="agree"
+    id="agree"
+    className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-2 focus:ring-indigo-500"
+  />
+
+  <label
+    htmlFor="agree"
+    className="text-sm leading-5 text-gray-600"
+  >
+    I agree to the{" "}
+    <a
+      href="/terms"
+      className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+    >
+      Terms & Conditions
+    </a>{" "}
+    and{" "}
+    <a
+      href="/privacy"
+      className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+    >
+      Privacy Policy
+    </a>
+    .
+  </label>
+</div>
 
           <button
             type="submit"
@@ -516,6 +546,7 @@ export default function AuthContainer({
                     ? "Sign in as Staff"
                     : "Sign in as Owner"}
           </button>
+          
         </form>
 
         <p className="mt-6 text-center text-sm text-slate-500">

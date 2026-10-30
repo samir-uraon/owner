@@ -887,11 +887,12 @@ function FilterButton({ active, onClick, children }) {
 }
 
 function MemberCard({ member, onClick }) {
+  
   const type = getMemberType(member);
   const category = getCategory(member);
   const isDoctor = type === "doctor";
   const businessName = member.businessName || getBusinessName(member);
-
+const router = useRouter();
   const CategoryIcon =
     CATEGORY_INFO[category]?.icon || Building2;
 
@@ -1006,18 +1007,23 @@ function MemberCard({ member, onClick }) {
         )}
       </div>
 
-      <button
-        type="button"
-        onClick={onClick}
-        className="mt-5 flex w-full items-center justify-between rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition group-hover:border-indigo-200 group-hover:bg-indigo-50 group-hover:text-indigo-700"
-      >
-        <span className="inline-flex items-center gap-2">
-          <UserCog size={16} />
-          Work
-        </span>
-
-        <ChevronRight size={17} />
-      </button>
+ 
+<button
+  type="button"
+  onClick={(event) => {
+    event.stopPropagation();
+    router.push(
+      `/owner/team-members/${member.id}?businessId=${member.businessId}&category=${getCategory(member)}`
+    );
+  }}
+  className="mt-5 flex w-full items-center justify-between rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition group-hover:border-indigo-200 group-hover:bg-indigo-50 group-hover:text-indigo-700"
+>
+  <span className="inline-flex items-center gap-2">
+    <UserCog size={16} />
+    Work
+  </span>
+  <ChevronRight size={17} />
+</button>
     </article>
   );
 }

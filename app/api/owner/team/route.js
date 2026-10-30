@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { ObjectId } from "mongodb";
 import { randomBytes } from "node:crypto";
+
 import clientPromise from "@/lib/mongodb";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
@@ -64,19 +65,72 @@ function getTeamRole(member, category) {
     : cleanString(member.role, 120).toLowerCase();
 }
 
+/**
+ * Normalize service records.
+ *
+ * Supports:
+ * ["General Consultation"]
+ *
+ * And:
+ * [
+ *   { name: "General Consultation", charge: 500 }
+ * ]
+ *
+ * New service records are saved as objects.
+ */
 function cleanServices(value) {
   if (!Array.isArray(value)) return [];
 
-  return [
-    ...new Set(
-      value
-        .map((item) => cleanString(item, 100))
-        .filter(Boolean)
-    ),
-  ].slice(0, 100);
+  const result = [];
+  const seen = new Set();
+
+  for (const item of value.slice(0, 100)) {
+    let name;
+    let charge;
+
+    if (typeof item === "string") {
+      name = cleanString(item, 100);
+      charge = 0;
+    } else if (
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item)
+    ) {
+      name = cleanString(item.name, 100);
+
+      if (
+        item.charge === "" ||
+        item.charge === null ||
+        item.charge === undefined
+      ) {
+        continue;
+      }
+
+      charge = Number(item.charge);
+
+      if (
+        !Number.isFinite(charge) ||
+        charge < 0 ||
+        charge > 100000000
+      ) {
+        continue;
+      }
+    } else {
+      continue;
+    }
+
+    if (!name) continue;
+
+    const key = name.toLowerCase();
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push({ name, charge });
+  }
+
+  return result;
 }
-
-
 
 function cleanSchedule(schedule = {}) {
   return Object.fromEntries(
@@ -95,8 +149,10 @@ function cleanSchedule(schedule = {}) {
             .filter(
               (slot) =>
                 slot &&
-                typeof slot === "object"
+                typeof slot === "object" &&
+                !Array.isArray(slot)
             )
+            .slice(0, 50)
             .map((slot) => ({
               open: cleanString(slot.open, 30),
               close: cleanString(slot.close, 30),
@@ -106,7 +162,10 @@ function cleanSchedule(schedule = {}) {
               ),
               capacity: Math.max(
                 1,
-                Math.floor(Number(slot.capacity) || 1)
+                Math.min(
+                  100000,
+                  Math.floor(Number(slot.capacity) || 1)
+                )
               ),
             })),
         },
@@ -115,50 +174,153 @@ function cleanSchedule(schedule = {}) {
   );
 }
 
+/**
+ * Profile information, services and schedule live in team.
+ * The business document stores only member IDs.
+ *
+ * Services can be sent as either:
+ * body.services
+ * body.member.services
+ */
 function cleanMember(body, category) {
-  const clinic = category === "clinic";
+  const clinic = isClinic(category);
+
+  const memberData =
+    body.member &&
+    typeof body.member === "object" &&
+    !Array.isArray(body.member)
+      ? body.member
+      : {};
+
+  const servicesInput =
+    body.services ?? memberData.services;
 
   const member = {
-    name: cleanString(body.name, 120),
-    phone: cleanString(body.phone, 30),
-    email: normalizeEmail(body.email),
+    name: cleanString(
+      body.name ?? memberData.name,
+      120
+    ),
+
+    phone: cleanString(
+      body.phone ?? memberData.phone,
+      30
+    ),
+
+    email: normalizeEmail(
+      body.email ?? memberData.email
+    ),
+
     experience: Math.max(
       0,
-      Math.min(100, Math.floor(Number(body.experience) || 0))
+      Math.min(
+        100,
+        Math.floor(
+          Number(
+            body.experience ?? memberData.experience
+          ) || 0
+        )
+      )
     ),
-    updatedAt: new Date(),
+
+    // Saved for both doctors and staff.
+    services: cleanServices(servicesInput),
   };
 
   if (clinic) {
-    member.specialization = cleanString(body.specialization, 120);
-    member.duration = Math.max(
-      1,
-      Math.min(1440, Math.floor(Number(body.duration) || 20))
-    );
-    member.fee = Math.max(0, Number(body.fee) || 0);
-    member.bookingCharge = Math.max(
-      0,
-      Number(body.bookingCharge) || 20
+    member.specialization = cleanString(
+      body.specialization ?? memberData.specialization,
+      120
     );
 
-    // Normalize the incoming schedule.
-    member.schedule = cleanSchedule(body.schedule);
+    member.duration = Math.max(
+      1,
+      Math.min(
+        1440,
+        Math.floor(
+          Number(
+            body.duration ?? memberData.duration
+          ) || 20
+        )
+      )
+    );
+
+    member.fee = Math.max(
+      0,
+      Math.min(
+        100000000,
+        Number(body.fee ?? memberData.fee) || 0
+      )
+    );
+
+    member.bookingCharge = Math.max(
+      0,
+      Math.min(
+        100000000,
+        Number(
+          body.bookingCharge ??
+            memberData.bookingCharge
+        ) || 20
+      )
+    );
+
+    member.schedule = cleanSchedule(
+      body.schedule ??
+        memberData.schedule ??
+        {}
+    );
   } else {
-    member.role = cleanString(body.role, 120);
-    member.services = cleanServices(body.services);
+    member.role = cleanString(
+      body.role ?? memberData.role,
+      120
+    );
   }
 
   return member;
 }
 
+function validateMember(member, category) {
+  if (!member.name) {
+    return "Name is required";
+  }
+
+  if (isClinic(category) && !member.specialization) {
+    return "Doctor specialization is required";
+  }
+
+  if (!isClinic(category) && !member.role) {
+    return "Staff role is required";
+  }
+
+  return null;
+}
+
+/**
+ * Supports ID-only arrays and legacy object arrays.
+ * New writes always store strings.
+ */
+function getMemberId(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    return String(value.id || value._id || "");
+  }
+
+  return "";
+}
+
 function serializeMember(member) {
   return {
     ...member,
-    _id: String(member._id || member.id),
-    id: String(member.id || member._id),
+    _id: String(member._id),
+    id: String(member._id),
   };
 }
 
+/**
+ * Verify that the logged-in owner owns the business.
+ */
 async function getOwnedBusiness(
   db,
   session,
@@ -213,13 +375,20 @@ async function getOwnedBusiness(
     ? owner.business
     : [];
 
-  const isLinked = references.some(
-    (reference) =>
-      reference &&
-      typeof reference === "object" &&
-      reference.businessId != null &&
-      String(reference.businessId) === String(businessId)
-  );
+  const isLinked = references.some((reference) => {
+    if (
+      !reference ||
+      typeof reference !== "object" ||
+      reference.businessId == null
+    ) {
+      return false;
+    }
+
+    return (
+      String(reference.businessId) ===
+      String(businessId)
+    );
+  });
 
   if (!isLinked) {
     return {
@@ -268,28 +437,14 @@ async function getTeamAccount(
   });
 }
 
-function validateMember(member, category) {
-  if (!member.name) {
-    return "Name is required";
-  }
-
-  if (
-    isClinic(category) &&
-    !member.specialization
-  ) {
-    return "Doctor specialization is required";
-  }
-
-  if (
-    !isClinic(category) &&
-    !member.role
-  ) {
-    return "Staff role is required";
-  }
-
-  return null;
-}
-
+/**
+ * GET
+ *
+ * Returns team records, including services from team.services.
+ *
+ * Business document:
+ * doctors: ["teamObjectId1", "teamObjectId2"]
+ */
 export async function GET(request) {
   try {
     const session = await getServerSession(authOptions);
@@ -303,6 +458,10 @@ export async function GET(request) {
     const businessId = searchParams.get("businessId");
     const category = searchParams.get("category");
 
+    if (!businessId || !category) {
+      return response("Business ID and category are required", 400);
+    }
+
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
 
@@ -313,30 +472,74 @@ export async function GET(request) {
       category
     );
 
-    if (result.error) return result.error;
+    if (result.error) {
+      return result.error;
+    }
 
+    const business = result.business;
+    const ownerId = result.ownerId;
+
+    // Get the correct member array from the business document.
     const field = teamField(category);
-    const members = Array.isArray(result.business[field])
-      ? result.business[field]
+
+    const storedIds = Array.isArray(business[field])
+      ? business[field]
       : [];
 
-    const memberIds = members
-      .map((member) => String(member.id || member._id || ""))
-      .filter((id) => ObjectId.isValid(id))
-      .map((id) => new ObjectId(id));
+    // Normalize member IDs to strings and remove duplicates.
+    const memberIds = [
+      ...new Set(
+        storedIds
+          .map(getMemberId)
+          .filter((id) => ObjectId.isValid(id))
+      ),
+    ];
 
-    const accounts = memberIds.length
-      ? await db
-          .collection("team")
-          .find({
-            _id: { $in: memberIds },
-            ownerId: result.ownerId,
-            clinicId: result.business._id,
-            category,
-          })
-          .toArray()
-      : [];
+    if (!memberIds.length) {
+      return NextResponse.json({
+        success: true,
+        team: [],
+        total: 0,
+      });
+    }
 
+    // Match ObjectId and string representations of ownerId
+    // and clinicId to support existing MongoDB records.
+    const ownerIdString = String(ownerId);
+    const businessObjectId = business._id;
+    const businessObjectIdString = String(business._id);
+
+    const ownerIdValues = [ownerIdString];
+
+    if (ObjectId.isValid(ownerIdString)) {
+      ownerIdValues.push(new ObjectId(ownerIdString));
+    }
+
+    const businessIdValues = [businessObjectIdString];
+
+    if (ObjectId.isValid(businessObjectIdString)) {
+      businessIdValues.push(
+        new ObjectId(businessObjectIdString)
+      );
+    }
+
+    const accounts = await db
+      .collection("team")
+      .find({
+        _id: {
+          $in: memberIds.map((id) => new ObjectId(id)),
+        },
+        ownerId: {
+          $in: ownerIdValues,
+        },
+        clinicId: {
+          $in: businessIdValues,
+        },
+        category,
+      })
+      .toArray();
+
+    // Preserve the member order from the business document.
     const accountsById = new Map(
       accounts.map((account) => [
         String(account._id),
@@ -344,54 +547,106 @@ export async function GET(request) {
       ])
     );
 
-    const team = members.map((member) => {
-      const memberId = String(member.id || member._id || "");
-      const account = accountsById.get(memberId);
-
-      return {
-        ...member,
-        _id: memberId,
-        id: memberId,
-        email: account?.email ?? member.email ?? "",
-        phone: account?.phone ?? member.phone ?? "",
-        role:
-          account?.role ??
-          (isClinic(category) ? "doctor" : member.role),
+    const team = memberIds
+      .map((id) => accountsById.get(id))
+      .filter(Boolean)
+      .map((account) => ({
+        ...serializeMember(account),
+        email: account.email ?? "",
+        phone: account.phone ?? "",
+        services: cleanServices(account.services),
+        role: account.role ?? "",
         category,
-        isActive: account?.isActive ?? true,
+        isActive: account.isActive ?? true,
         mustChangePassword:
-          account?.mustChangePassword ?? false,
+          account.mustChangePassword ?? false,
 
-        // Kept for compatibility with your current
-        // owner profile's temporary-password display.
-        temporaryPassword:
-          account?.password ?? null,
-      };
-    });
+        // Retained for compatibility with the existing UI.
+        temporaryPassword: account.password ?? null,
+      }));
 
     return NextResponse.json({
       success: true,
       team,
+      total: team.length,
     });
   } catch (error) {
     console.error("GET owner team error:", error);
 
-    return response(
-      "Failed to load team members",
-      500
-    );
+    return response("Failed to load team members", 500);
   }
 }
+
+/**
+ * POST
+ *
+ * 1. Insert the complete member into team.
+ * 2. Get the inserted ID.
+ * 3. Store only that ID string in doctors[] or staff[].
+ */
+
+function normalizeMemberServices(member, category) {
+  const isDoctor = category === "clinic";
+
+  if (isDoctor) {
+    const fee = Number(member.fee);
+
+    if (!Number.isFinite(fee) || fee < 0) {
+      return {
+        error: "Invalid consultation charge.",
+      };
+    }
+
+    return {
+      member: {
+        ...member,
+        fee,
+        services: [
+          {
+            name: "General Consultation",
+            charge: fee,
+          },
+        ],
+      },
+    };
+  }
+
+  const services = Array.isArray(member.services)
+    ? member.services.map((service) => ({
+        name: cleanString(service?.name, 100),
+        charge: Number(service?.charge),
+      }))
+    : [];
+
+  if (
+    services.some(
+      (service) =>
+        !service.name ||
+        !Number.isFinite(service.charge) ||
+        service.charge < 0
+    )
+  ) {
+    return {
+      error: "Each staff service needs a valid name and charge.",
+    };
+  }
+
+  return {
+    member: {
+      ...member,
+      services,
+    },
+  };
+}
+
 export async function POST(request) {
   let db;
   let insertedTeamId = null;
   let businessUpdated = false;
-  let businessId = null;
   let ownerId = null;
   let category = null;
-  let field = null;
-  let memberId = null;
   let businessObjectId = null;
+  let field = null;
 
   try {
     const session = await getServerSession(authOptions);
@@ -402,15 +657,22 @@ export async function POST(request) {
 
     const body = await request.json();
 
-    businessId = cleanString(body.businessId, 100);
+    const businessId = cleanString(
+      body.businessId,
+      100
+    );
+
     category = cleanString(body.category, 50);
 
     if (
       !businessId ||
       !ObjectId.isValid(businessId) ||
-      !CATEGORIES[category]
+      !Object.hasOwn(CATEGORIES, category)
     ) {
-      return response("Invalid business ID or category", 400);
+      return response(
+        "Invalid business ID or category",
+        400
+      );
     }
 
     const client = await clientPromise;
@@ -429,85 +691,98 @@ export async function POST(request) {
     businessObjectId = result.business._id;
     field = teamField(category);
 
-    const member = cleanMember(body, category);
+  let member = cleanMember(body, category);
 
-if (category === "clinic") {
-  member.schedule = cleanSchedule(
-    body.schedule ?? body.member?.schedule ?? {}
-  );
+const normalized = normalizeMemberServices(
+  member,
+  category
+);
+
+if (normalized.error) {
+  return response(normalized.error, 400);
 }
 
-const validationError = validateMember(member, category);
+member = normalized.member;
+
+const validationError = validateMember(
+  member,
+  category
+);
 
 if (validationError) {
-  return response(validationError);
+  return response(validationError, 400);
 }
 
-const now = new Date();
-const temporaryPassword = generateTemporaryPassword();
+    const now = new Date();
+    const temporaryPassword =
+      generateTemporaryPassword();
 
-const teamRecord = {
-  ownerId,
-  clinicId: businessObjectId,
-  name: member.name,
-  email: member.email || null,
-  phone: member.phone || null,
-  role: getTeamRole(member, category),
-  category,
-  password: temporaryPassword,
-  isActive: true,
-  mustChangePassword: true,
-  createdAt: now,
-  updatedAt: now,
-  ...(category === "clinic"
-    ? { schedule: member.schedule }
-    : {}),
-};
-
-const teamInsert = await db.collection("team").insertOne(teamRecord);
-
-insertedTeamId = teamInsert.insertedId;
-memberId = insertedTeamId.toString();
-
-member.id = memberId;
-member.createdAt = now;
-member.updatedAt = now;
-
-const updateResult = await db
-  .collection(CATEGORIES[category])
-  .updateOne(
-    {
-      _id: businessObjectId,
+    // Profile, services and schedule are saved in team.
+    const teamRecord = {
+      ...member,
       ownerId,
-    },
-    {
-      $push: {
-        [field]: member,
-      },
-      $set: {
-        setupCompleted: true,
-        updatedAt: now,
-      },
+      clinicId: businessObjectId,
+      name: member.name,
+      email: member.email || null,
+      phone: member.phone || null,
+      role: getTeamRole(member, category),
+      category,
+        businessName:result.business.name,
+      password: temporaryPassword,
+      isActive: true,
+      mustChangePassword: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const teamInsert = await db
+      .collection("team")
+      .insertOne(teamRecord);
+
+    insertedTeamId = teamInsert.insertedId;
+
+    const memberId = insertedTeamId.toString();
+
+    // Store only the ID string in the business document.
+    const updateResult = await db
+      .collection(CATEGORIES[category])
+      .updateOne(
+        {
+          _id: businessObjectId,
+          ownerId,
+        },
+        {
+          $addToSet: {
+            [field]: memberId,
+          },
+          $set: {
+            setupCompleted: true,
+            updatedAt: now,
+          },
+        }
+      );
+
+    if (!updateResult.matchedCount) {
+      await db.collection("team").deleteOne({
+        _id: insertedTeamId,
+        ownerId,
+      });
+
+      insertedTeamId = null;
+
+      return response("Business not found", 404);
     }
-  );
 
-if (!updateResult.matchedCount) {
-  await db.collection("team").deleteOne({
-    _id: insertedTeamId,
-    ownerId,
-  });
-
-  insertedTeamId = null;
-  return response("Business not found", 404);
-}
-
-businessUpdated = true;
+    businessUpdated = true;
 
     return NextResponse.json(
       {
         success: true,
         message: "Team member added successfully",
-        member: serializeMember(member),
+        member: serializeMember({
+          ...teamRecord,
+          _id: insertedTeamId,
+        }),
         credentials: {
           memberId,
           temporaryPassword,
@@ -523,25 +798,27 @@ businessUpdated = true;
           businessObjectId &&
           ownerId &&
           field &&
-          memberId &&
           category &&
           CATEGORIES[category]
         ) {
-          await db.collection(CATEGORIES[category]).updateOne(
-            {
-              _id: businessObjectId,
-              ownerId,
-            },
-            {
-              $pull: {
-                [field]: { id: memberId },
+          await db
+            .collection(CATEGORIES[category])
+            .updateOne(
+              {
+                _id: businessObjectId,
+                ownerId,
               },
-            }
-          );
+              {
+                $pull: {
+                  [field]: insertedTeamId.toString(),
+                },
+              }
+            );
         }
 
         await db.collection("team").deleteOne({
           _id: insertedTeamId,
+          ownerId,
         });
       } catch (cleanupError) {
         console.error(
@@ -553,10 +830,19 @@ businessUpdated = true;
 
     console.error("POST owner team error:", error);
 
-    return response("Failed to add team member", 500);
+    return response(
+      "Failed to add team member",
+      500
+    );
   }
 }
 
+/**
+ * PUT
+ *
+ * Updates member profile, services and schedule in team.
+ * The business array continues to store only the ID.
+ */
 export async function PUT(request) {
   try {
     const session = await getServerSession(authOptions);
@@ -566,9 +852,16 @@ export async function PUT(request) {
     }
 
     const body = await request.json();
+     
+    
 
-    const businessId = cleanString(body.businessId, 100);
+    const businessId = cleanString(
+      body.businessId,
+      100
+    );
+
     const category = cleanString(body.category, 50);
+
     const memberId = cleanString(
       body._id || body.id,
       150
@@ -577,12 +870,15 @@ export async function PUT(request) {
     if (
       !businessId ||
       !ObjectId.isValid(businessId) ||
-      !CATEGORIES[category]
+      !Object.hasOwn(CATEGORIES, category)
     ) {
-      return response("Invalid business ID or category", 400);
+      return response(
+        "Invalid business ID or category",
+        400
+      );
     }
 
-    if (!memberId || !ObjectId.isValid(memberId)) {
+    if (!ObjectId.isValid(memberId)) {
       return response("Invalid team member ID", 400);
     }
 
@@ -602,68 +898,24 @@ export async function PUT(request) {
     const businessObjectId = result.business._id;
     const field = teamField(category);
 
-    const existingMember = (
-      Array.isArray(result.business[field])
-        ? result.business[field]
-        : []
-    ).find(
-      (item) =>
-        String(item.id || item._id || "") === memberId
+    const storedIds = Array.isArray(
+      result.business[field]
+    )
+      ? result.business[field]
+      : [];
+
+    const isLinked = storedIds.some(
+      (item) => getMemberId(item) === memberId
     );
 
-    if (!existingMember) {
-      return response("Team member not found", 404);
-    }
-
-  const member = cleanMember(body, category);
-
-if (category === "clinic") {
-  member.schedule = cleanSchedule(
-    body.schedule ?? body.member?.schedule ?? {}
-  );
-}
-
-    const validationError = validateMember(member, category);
-
-    if (validationError) {
-      return response(validationError);
-    }
-
-    const now = new Date();
-
-    const updatedMember = {
-      ...member,
-      id: memberId,
-      createdAt: existingMember.createdAt || now,
-      updatedAt: now,
-    };
-
-    // Update the business document.
-    const businessUpdate = await db
-      .collection(CATEGORIES[category])
-      .updateOne(
-        {
-          _id: businessObjectId,
-          ownerId,
-          [`${field}.id`]: memberId,
-        },
-        {
-          $set: {
-  [`${field}.$`]: updatedMember,
-  updatedAt: now,
-},
-        }
-      );
-
-    if (!businessUpdate.matchedCount) {
+    if (!isLinked) {
       return response(
-        "Business or team member not found",
+        "Team member not found in this business",
         404
       );
     }
 
-    // Synchronize the separate login account.
-    const account = await getTeamAccount(
+    const existingAccount = await getTeamAccount(
       db,
       memberId,
       ownerId,
@@ -671,21 +923,46 @@ if (category === "clinic") {
       category
     );
 
-    if (account) {
-      const teamUpdate = {
-        name: updatedMember.name,
-        email: updatedMember.email || null,
-        phone: updatedMember.phone || null,
-        role: getTeamRole(updatedMember, category),
-        updatedAt: now,
-      };
+    if (!existingAccount) {
+      return response("Team account not found", 404);
+    }
 
-      // Update schedule in the team collection too.
-  if (category === "clinic") {
-  teamUpdate.schedule = updatedMember.schedule;
+  let member = cleanMember(body, category);
+
+const normalized = normalizeMemberServices(
+  member,
+  category
+);
+
+if (normalized.error) {
+  return response(normalized.error, 400);
 }
 
-      await db.collection("team").updateOne(
+member = normalized.member;
+
+const validationError = validateMember(
+  member,
+  category
+);
+
+if (validationError) {
+  return response(validationError, 400);
+}
+
+    const now = new Date();
+
+    const updatedMember = {
+      ...member,
+      ownerId,
+      clinicId: businessObjectId,
+      category,
+      role: getTeamRole(member, category),
+      updatedAt: now,
+    };
+
+    const updateResult = await db
+      .collection("team")
+      .updateOne(
         {
           _id: new ObjectId(memberId),
           ownerId,
@@ -693,15 +970,22 @@ if (category === "clinic") {
           category,
         },
         {
-          $set: teamUpdate,
+          $set: updatedMember,
         }
       );
+
+    if (!updateResult.matchedCount) {
+      return response("Team account not found", 404);
     }
 
     return NextResponse.json({
       success: true,
       message: "Team member updated successfully",
-      member: serializeMember(updatedMember),
+      member: serializeMember({
+        ...existingAccount,
+        ...updatedMember,
+        _id: new ObjectId(memberId),
+      }),
     });
   } catch (error) {
     console.error("PUT owner team error:", error);
@@ -713,6 +997,12 @@ if (category === "clinic") {
   }
 }
 
+/**
+ * DELETE
+ *
+ * Remove the ID from the business array and delete
+ * the corresponding team account.
+ */
 export async function DELETE(request) {
   try {
     const session = await getServerSession(authOptions);
@@ -725,12 +1015,24 @@ export async function DELETE(request) {
 
     const businessId = searchParams.get("businessId");
     const category = searchParams.get("category");
+
     const memberId = cleanString(
       searchParams.get("memberId"),
       150
     );
 
-    if (!memberId || !ObjectId.isValid(memberId)) {
+    if (
+      !businessId ||
+      !ObjectId.isValid(businessId) ||
+      !Object.hasOwn(CATEGORIES, category)
+    ) {
+      return response(
+        "Invalid business ID or category",
+        400
+      );
+    }
+
+    if (!ObjectId.isValid(memberId)) {
       return response("Invalid team member ID", 400);
     }
 
@@ -750,32 +1052,39 @@ export async function DELETE(request) {
     const businessObjectId = result.business._id;
     const field = teamField(category);
 
-    const existingMember = (
-      Array.isArray(result.business[field])
-        ? result.business[field]
-        : []
-    ).find(
-      (member) =>
-        String(member.id || member._id || "") === memberId
+    const storedIds = Array.isArray(
+      result.business[field]
+    )
+      ? result.business[field]
+      : [];
+
+    const isLinked = storedIds.some(
+      (item) => getMemberId(item) === memberId
     );
 
-    if (!existingMember) {
+    if (!isLinked) {
       return response("Team member not found", 404);
     }
 
     const now = new Date();
 
-    const updateResult = await db
+    // Remove both string IDs and legacy object entries.
+    const pullResult = await db
       .collection(CATEGORIES[category])
       .updateOne(
         {
           _id: businessObjectId,
           ownerId,
-          [`${field}.id`]: memberId,
         },
         {
           $pull: {
-            [field]: { id: memberId },
+            [field]: {
+              $in: [
+                memberId,
+                { id: memberId },
+                { _id: memberId },
+              ],
+            },
           },
           $set: {
             updatedAt: now,
@@ -783,8 +1092,8 @@ export async function DELETE(request) {
         }
       );
 
-    if (!updateResult.matchedCount) {
-      return response("Team member not found", 404);
+    if (!pullResult.matchedCount) {
+      return response("Business not found", 404);
     }
 
     const accountDeleteResult = await db
@@ -814,24 +1123,27 @@ export async function DELETE(request) {
       Array.isArray(updatedBusiness?.[field]) &&
       updatedBusiness[field].length > 0;
 
-    await db.collection(CATEGORIES[category]).updateOne(
-      {
-        _id: businessObjectId,
-        ownerId,
-      },
-      {
-        $set: {
-          setupCompleted: hasMembers,
-          updatedAt: new Date(),
+    await db
+      .collection(CATEGORIES[category])
+      .updateOne(
+        {
+          _id: businessObjectId,
+          ownerId,
         },
-      }
-    );
+        {
+          $set: {
+            setupCompleted: hasMembers,
+            updatedAt: new Date(),
+          },
+        }
+      );
 
     return NextResponse.json({
       success: true,
       message: "Team member removed successfully",
       memberId,
-      accountDeleted: accountDeleteResult.deletedCount > 0,
+      accountDeleted:
+        accountDeleteResult.deletedCount > 0,
       setupCompleted: hasMembers,
     });
   } catch (error) {

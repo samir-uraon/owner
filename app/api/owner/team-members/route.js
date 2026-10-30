@@ -1,4 +1,3 @@
- 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { ObjectId } from "mongodb";
@@ -12,46 +11,23 @@ const CATEGORIES = {
   "diagnostic-centre": "diagnostic",
 };
 
+const COLLECTION_CATEGORIES = {
+  clinics: "clinic",
+  saloons: "saloon",
+  parlour: "beauty-parlour",
+  diagnostic: "diagnostic-centre",
+};
+
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
 }
 
 function normalizeId(value) {
-  if (value == null) return "";
-  return String(value);
-}
-
-function getOwnerQuery(session) {
-  const conditions = [];
-
-  if (session.user.id) {
-    conditions.push({ ownerId: session.user.id });
-    conditions.push({ userId: session.user.id });
-    conditions.push({ createdBy: session.user.id });
-
-    if (ObjectId.isValid(session.user.id)) {
-      const objectId = new ObjectId(session.user.id);
-
-      conditions.push({ ownerId: objectId });
-      conditions.push({ userId: objectId });
-      conditions.push({ createdBy: objectId });
-    }
-  }
-
-  if (session.user.email) {
-    conditions.push({
-      ownerEmail: session.user.email.toLowerCase(),
-    });
-    conditions.push({
-      email: session.user.email.toLowerCase(),
-    });
-  }
-
-  return conditions.length ? { $or: conditions } : null;
+  return value == null ? "" : String(value);
 }
 
 function getMemberType(member, category) {
-  const explicitType = String(
+  const role = String(
     member.type ||
       member.memberType ||
       member.designation ||
@@ -59,13 +35,13 @@ function getMemberType(member, category) {
       ""
   ).toLowerCase();
 
-  if (explicitType.includes("doctor")) return "doctor";
+  if (role.includes("doctor")) return "doctor";
 
   if (
-    explicitType.includes("staff") ||
-    explicitType.includes("receptionist") ||
-    explicitType.includes("assistant") ||
-    explicitType.includes("nurse")
+    role.includes("staff") ||
+    role.includes("receptionist") ||
+    role.includes("assistant") ||
+    role.includes("nurse")
   ) {
     return "staff";
   }
@@ -73,16 +49,14 @@ function getMemberType(member, category) {
   return category === "clinic" ? "doctor" : "staff";
 }
 
-function normalizeMember(member, business, category) {
-  const businessId = normalizeId(business._id);
-
+function normalizeMember(member, business, category, businessId) {
   return {
     ...member,
-    id: normalizeId(member.id || member._id),
+    id: normalizeId(member._id || member.id),
     _id: normalizeId(member._id || member.id),
     name:
-      member.name ||
       member.fullName ||
+      member.name ||
       member.doctorName ||
       member.staffName ||
       "",
@@ -90,24 +64,60 @@ function normalizeMember(member, business, category) {
     category,
     businessId,
     businessName:
-      business.name ||
-      business.shopName ||
-      business.businessName ||
-      business.clinicName ||
+      business?.name ||
+      business?.shopName ||
+      business?.businessName ||
+      business?.clinicName ||
+      member.businessName ||
+      member.clinicName ||
       "Business",
     shopName:
-      business.shopName ||
-      business.name ||
-      business.businessName ||
+      business?.shopName ||
+      business?.name ||
+      business?.businessName ||
       "",
-    phone: member.phone || member.mobile || member.phoneNumber || "",
-    email: member.email || "",
+    phone:
+      member.phone ||
+      member.mobile ||
+      member.phoneNumber ||
+      "",
+    email: member.email || member.emailAddress || "",
     specialization:
       member.specialization ||
       member.speciality ||
       member.department ||
       "",
     role: member.role || member.designation || "",
+    experience: member.experience || member.yearsOfExperience || null,
+    fee: member.fee || member.consultationFee || member.price || null,
+  };
+}
+
+function normalizeCustomer(record) {
+  return {
+    id: normalizeId(record._id || record.id),
+    customerName:
+      record.patientName ||
+      record.customerName ||
+      record.userName ||
+      record.name ||
+      "Guest Customer",
+    phone:
+      record.patientPhone ||
+      record.customerPhone ||
+      record.phone ||
+      record.mobile ||
+      "",
+    email:
+      record.patientEmail ||
+      record.customerEmail ||
+      record.email ||
+      "",
+    date: record.appointmentDate || record.bookingDate || record.date || null,
+    time: record.appointmentTime || record.bookingTime || record.time || "",
+    status: record.status || "confirmed",
+    serviceName: record.serviceName || record.service || record.treatment || "",
+    amount: record.amount || record.fee || record.price || null,
   };
 }
 
@@ -115,17 +125,30 @@ export async function GET(request) {
   try {
     const session = await getServerSession(authOptions);
 
-    if (!session?.user?.id || !session?.user?.email) {
+    if (!session?.user?.id) {
       return json(
-        { success: false, message: "Please log in to view your team." },
+        {
+          success: false,
+          message: "Please log in to view team details.",
+        },
         401
       );
     }
 
+    if (session.user.role && session.user.role !== "owner") {
+      return json(
+        {
+          success: false,
+          message: "Only owners can view team members.",
+        },
+        403
+      );
+    }
+
     const { searchParams } = new URL(request.url);
+    const requestedMemberId = searchParams.get("memberId");
     const requestedBusinessId = searchParams.get("businessId");
     const requestedCategory = searchParams.get("category");
-    const all = searchParams.get("all") === "true";
 
     if (
       requestedCategory &&
@@ -144,74 +167,221 @@ export async function GET(request) {
       );
     }
 
-    const ownerQuery = getOwnerQuery(session);
-
-    if (!ownerQuery) {
-      return json({ success: true, team: [] });
-    }
-
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
 
-    const categories = requestedCategory
-      ? [requestedCategory]
-      : Object.keys(CATEGORIES);
+    const owners = db.collection("owners");
+    const teamCollection = db.collection("team");
 
-    const team = [];
+    // 1. Authenticate owner
+    const ownerConditions = [{ _id: session.user.id }];
+    if (ObjectId.isValid(session.user.id)) {
+      ownerConditions.push({ _id: new ObjectId(session.user.id) });
+    }
 
-    for (const category of categories) {
-      const collectionName = CATEGORIES[category];
-      const collection = db.collection(collectionName);
+    const owner = await owners.findOne({ $or: ownerConditions });
 
-      const businessQuery = { ...ownerQuery };
+    if (!owner) {
+      return json(
+        {
+          success: false,
+          message: "Owner account not found.",
+        },
+        404
+      );
+    }
 
-      if (requestedBusinessId) {
-        businessQuery._id = new ObjectId(requestedBusinessId);
-      }
+    // 2. Read business references from the owner document
+    const ownerBusinesses = Array.isArray(owner.business)
+      ? owner.business
+      : [];
 
-      const businesses = await collection
-        .find(businessQuery)
-        .toArray();
+    const linkedBusinesses = ownerBusinesses
+      .filter((item) => item && typeof item === "object")
+      .map((item) => {
+        const businessId = normalizeId(item.businessId);
+        const collection = String(item.collection || "").toLowerCase();
+        const category = COLLECTION_CATEGORIES[collection];
 
-      for (const business of businesses) {
-        const businessId = normalizeId(business._id);
+        return {
+          businessId,
+          collection,
+          category,
+        };
+      })
+      .filter((item) => {
+        if (!item.businessId || !item.category) return false;
 
-        // Do not expose members from businesses the owner does not own.
         if (
           requestedBusinessId &&
-          businessId !== requestedBusinessId
+          item.businessId !== requestedBusinessId
         ) {
+          return false;
+        }
+
+        if (
+          requestedCategory &&
+          item.category !== requestedCategory
+        ) {
+          return false;
+        }
+
+        return true;
+      });
+
+    if (linkedBusinesses.length === 0) {
+      return json({
+        success: true,
+        team: [],
+        total: 0,
+      });
+    }
+
+    // 3. FETCH SINGLE MEMBER PROFILE & ASSIGNED CUSTOMERS
+    if (requestedMemberId) {
+      const memberIdValues = [requestedMemberId];
+      if (ObjectId.isValid(requestedMemberId)) {
+        memberIdValues.push(new ObjectId(requestedMemberId));
+      }
+
+      const rawMember = await teamCollection.findOne({
+        _id: { $in: memberIdValues },
+      });
+
+      if (!rawMember) {
+        return json(
+          { success: false, message: "Team member not found." },
+          404
+        );
+      }
+
+      const memberBusinessId = normalizeId(
+        rawMember.clinicId || rawMember.businessId
+      );
+
+      // Validate owner access
+      const authorizedBusiness = linkedBusinesses.find(
+        (b) => b.businessId === memberBusinessId
+      );
+
+      if (!authorizedBusiness) {
+        return json(
+          {
+            success: false,
+            message: "You are not authorized to view this team member.",
+          },
+          403
+        );
+      }
+
+      const { collection, category } = authorizedBusiness;
+      let business = {};
+
+      if (ObjectId.isValid(memberBusinessId)) {
+        business =
+          (await db
+            .collection(collection)
+            .findOne({ _id: new ObjectId(memberBusinessId) })) || {};
+      }
+
+      const normalizedMemberProfile = normalizeMember(
+        rawMember,
+        business,
+        category,
+        memberBusinessId
+      );
+
+      // Search appointments & bookings for customers handled by this member
+      const appointmentQuery = {
+        $or: [
+          { doctorId: { $in: memberIdValues } },
+          { staffId: { $in: memberIdValues } },
+          { memberId: { $in: memberIdValues } },
+        ],
+      };
+
+      const [appointments, bookings] = await Promise.all([
+        db.collection("appointments").find(appointmentQuery).toArray(),
+        db.collection("bookings").find(appointmentQuery).toArray(),
+      ]);
+
+      const customers = [...appointments, ...bookings].map(normalizeCustomer);
+
+      return json({
+        success: true,
+        member: normalizedMemberProfile,
+        customers,
+        totalCustomers: customers.length,
+      });
+    }
+
+    // 4. FETCH ALL TEAM MEMBERS
+    const team = [];
+    const businessCache = new Map();
+
+    for (const linkedBusiness of linkedBusinesses) {
+      const { businessId, collection, category } = linkedBusiness;
+
+      const businessIdValues = [businessId];
+      if (ObjectId.isValid(businessId)) {
+        businessIdValues.push(new ObjectId(businessId));
+      }
+
+      const memberQuery = {
+        $or: [
+          { clinicId: { $in: businessIdValues } },
+          { businessId: { $in: businessIdValues } },
+        ],
+      };
+
+      const members = await teamCollection.find(memberQuery).toArray();
+
+      let business = {};
+
+      if (ObjectId.isValid(businessId)) {
+        const cacheKey = `${collection}:${businessId}`;
+
+        if (!businessCache.has(cacheKey)) {
+          const businessDocument = await db
+            .collection(collection)
+            .findOne({
+              _id: new ObjectId(businessId),
+            });
+
+          businessCache.set(
+            cacheKey,
+            businessDocument || {}
+          );
+        }
+
+        business = businessCache.get(cacheKey);
+      }
+
+      for (const member of members) {
+        const memberBusinessId = normalizeId(
+          member.clinicId || member.businessId
+        );
+
+        if (memberBusinessId !== businessId) {
           continue;
         }
 
-        const members = Array.isArray(business.teamMembers)
-          ? business.teamMembers
-          : [];
-
-        for (const member of members) {
-          team.push(normalizeMember(member, business, category));
-        }
-
-        // Clinics may store doctors separately from staff.
-        if (category === "clinic" && Array.isArray(business.doctors)) {
-          for (const doctor of business.doctors) {
-            team.push(
-              normalizeMember(
-                { ...doctor, type: "doctor" },
-                business,
-                category
-              )
-            );
-          }
-        }
+        team.push(
+          normalizeMember(
+            member,
+            business,
+            category,
+            businessId
+          )
+        );
       }
     }
 
-    // Remove duplicates when a document appears in both arrays.
+    // Remove duplicates
     const uniqueTeam = Array.from(
       new Map(
         team.map((member) => [
-          `${member.businessId}:${member.id || member.name}`,
+          `${member.businessId}:${member.id}`,
           member,
         ])
       ).values()

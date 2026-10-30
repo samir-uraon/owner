@@ -46,15 +46,23 @@ async function getOwnedBusiness(db, session, businessId, category) {
 
   const references = Array.isArray(owner.business) ? owner.business : [];
 
+   
+  
   const isLinked = references.some((reference) => {
-    if (!reference || typeof reference !== "object") return false;
+  if (!reference || typeof reference !== "object") {
+    return false;
+  }
+ 
 
-    return (
-      String(reference.businessId ?? "") === businessId &&
-      (!reference.category ||
-        String(reference.category).toLowerCase() === category)
-    );
-  });
+  return (
+    String(reference.businessId ?? "") === String(businessId) &&
+    String(reference.collection ?? "").toLowerCase() ===
+      String(CATEGORIES[category] ?? "").toLowerCase()
+  );
+});
+
+ 
+
 
   if (!isLinked) {
     return { error: "Business not found in your account.", status: 404 };
@@ -86,6 +94,9 @@ export async function GET(request) {
       searchParams.get("businessId"),
       searchParams.get("category")?.toLowerCase()
     );
+   
+    
+    
 
     if (result.error) {
       return NextResponse.json(
@@ -158,7 +169,7 @@ export async function PUT(request) {
       lat,
       lng,
       imageUrl,
-      services,
+     
     } = body;
 
     const businessName = String(name || "").trim();
@@ -170,38 +181,9 @@ export async function PUT(request) {
       );
     }
 
-    if (!Array.isArray(services)) {
-      return NextResponse.json(
-        { error: "Services must be an array." },
-        { status: 400 }
-      );
-    }
+   
 
-    const cleanedServices = [];
-
-    for (const service of services) {
-      if (!service || typeof service.name !== "string") {
-        continue;
-      }
-
-      const serviceName = service.name.trim();
-      if (!serviceName) continue;
-
-      let charge = null;
-
-      if (service.charge !== "" && service.charge != null) {
-        charge = Number(service.charge);
-
-        if (!Number.isFinite(charge) || charge < 0) {
-          return NextResponse.json(
-            { error: `Invalid charge for ${serviceName}.` },
-            { status: 400 }
-          );
-        }
-      }
-
-      cleanedServices.push({ name: serviceName, charge });
-    }
+  
 
     const parseCoordinate = (value, min, max, field) => {
       if (value === "" || value == null) return null;
@@ -236,7 +218,7 @@ export async function PUT(request) {
       address: String(address || "").trim(),
 
       imageUrl: String(imageUrl || "").trim(),
-      services: cleanedServices,
+     
       updatedAt: new Date(),
     };
 

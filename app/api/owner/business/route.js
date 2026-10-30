@@ -5,6 +5,8 @@ import { Readable } from "node:stream";
 import { v2 as cloudinary } from "cloudinary";
 import clientPromise from "@/lib/mongodb";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { ObjectId } from "mongodb";
+ 
 
  
 
@@ -45,68 +47,7 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function validateServices(services) {
-  if (
-    !Array.isArray(services) ||
-    services.length === 0 ||
-    services.length > 100
-  ) {
-    return null;
-  }
 
-  const normalized = [];
-  const seen = new Set();
-
-  for (const service of services) {
-    let name;
-    let charge;
-
-    if (
-      service &&
-      typeof service === "object" &&
-      !Array.isArray(service)
-    ) {
-      name = service.name;
-      charge = service.charge;
-    } else {
-      name = service;
-      charge = 0;
-    }
-
-    if (
-      typeof name !== "string" ||
-      !name.trim() ||
-      name.trim().length > 100
-    ) {
-      return null;
-    }
-
-    if (
-      typeof charge !== "number" ||
-      !Number.isFinite(charge) ||
-      charge < 0 ||
-      charge > 100000000
-    ) {
-      return null;
-    }
-
-    const cleanName = name.trim();
-    const key = cleanName.toLowerCase();
-
-    if (seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-
-    normalized.push({
-      name: cleanName,
-      charge,
-    });
-  }
-
-  return normalized.length ? normalized : null;
-}
 
 function uploadToCloudinary(buffer, mimetype) {
   return new Promise((resolve, reject) => {
@@ -234,7 +175,7 @@ export async function POST(req) {
       address,
       city,
       pincode,
-      services,
+       
     } = body;
 
     const categoryConfig = categories[category];
@@ -333,18 +274,8 @@ export async function POST(req) {
       );
     }
 
-    const cleanedServices = validateServices(services);
-
-    if (!cleanedServices) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Add at least one valid service with a valid charge.",
-        },
-        { status: 400 }
-      );
-    }
+ 
+  
 
     const lat = Number(body.lat ?? body.latitude);
     const lng = Number(body.lng ?? body.longitude);
@@ -485,14 +416,10 @@ export async function POST(req) {
 
   const now = new Date();
 
-const counter = await db.collection("counters").findOneAndUpdate(
-  { _id: "businessId" },
-  { $inc: { sequence: 1 } },
-  { upsert: true, returnDocument: "after" }
-);
+
 
 const businessData = {
-  id: `clinic-${1000 + counter.sequence}`,
+ 
   ownerId,
   ownerName: owner.name || session.user.name || "",
   ownerEmail: normalizedEmail,
@@ -504,7 +431,7 @@ const businessData = {
   address: address.trim(),
   lat,
   lng,
-  services: cleanedServices,
+ 
   imageUrl: imageData.imageUrl,
   imagePublicId: imageData.imagePublicId,
   setupCompleted: false,
@@ -633,6 +560,9 @@ export async function GET() {
       }
     );
 
+  
+    
+
     if (!owner) {
       return NextResponse.json(
         { error: "Owner account not found." },
@@ -644,6 +574,7 @@ export async function GET() {
       ? owner.business
       : [];
 
+   
     const businesses = await Promise.all(
       references.map(async (reference) => {
         if (!reference || typeof reference !== "object") {
@@ -659,18 +590,16 @@ export async function GET() {
         }
 
          
-
-
       
 
         const business = await db
           .collection(collectionName)
           .findOne({
-            _id: reference.businessId,
+            _id: new ObjectId(reference.businessId),
            ownerId:owner._id
           });
 
-          
+                
            
 
         if (!business) {
@@ -688,6 +617,10 @@ export async function GET() {
         };
       })
     );
+
+
+   
+    
 
     const validBusinesses = businesses
       .filter(Boolean)
