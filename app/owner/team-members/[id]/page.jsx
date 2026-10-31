@@ -143,7 +143,7 @@ function MemberWorkspaceContent() {
       if (category) queryParams.set("category", category);
 
       const response = await fetch(
-        `/api/owner/team-members?${queryParams.toString()}`
+        `/api/owner/teamMembers?${queryParams.toString()}`
       );
       const data = await response.json();
 

@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { ObjectId } from "mongodb";
@@ -54,15 +55,18 @@ function normalizeMember(member, business, category, businessId) {
     ...member,
     id: normalizeId(member._id || member.id),
     _id: normalizeId(member._id || member.id),
+
     name:
       member.fullName ||
       member.name ||
       member.doctorName ||
       member.staffName ||
       "",
+
     type: getMemberType(member, category),
     category,
     businessId,
+
     businessName:
       business?.name ||
       business?.shopName ||
@@ -71,22 +75,27 @@ function normalizeMember(member, business, category, businessId) {
       member.businessName ||
       member.clinicName ||
       "Business",
+
     shopName:
       business?.shopName ||
       business?.name ||
       business?.businessName ||
       "",
+
     phone:
       member.phone ||
       member.mobile ||
       member.phoneNumber ||
       "",
+
     email: member.email || member.emailAddress || "",
+
     specialization:
       member.specialization ||
       member.speciality ||
       member.department ||
       "",
+
     role: member.role || member.designation || "",
     experience: member.experience || member.yearsOfExperience || null,
     fee: member.fee || member.consultationFee || member.price || null,
@@ -96,33 +105,55 @@ function normalizeMember(member, business, category, businessId) {
 function normalizeCustomer(record) {
   return {
     id: normalizeId(record._id || record.id),
+
     customerName:
       record.patientName ||
       record.customerName ||
       record.userName ||
       record.name ||
       "Guest Customer",
+
     phone:
       record.patientPhone ||
       record.customerPhone ||
       record.phone ||
       record.mobile ||
       "",
+
     email:
       record.patientEmail ||
       record.customerEmail ||
       record.email ||
       "",
-    date: record.appointmentDate || record.bookingDate || record.date || null,
-    time: record.appointmentTime || record.bookingTime || record.time || "",
+
+    date:
+      record.appointmentDate ||
+      record.bookingDate ||
+      record.date ||
+      null,
+
+    time:
+      record.appointmentTime ||
+      record.bookingTime ||
+      record.time ||
+      "",
+
     status: record.status || "confirmed",
-    serviceName: record.serviceName || record.service || record.treatment || "",
+
+    serviceName:
+      record.serviceName ||
+      record.service ||
+      record.treatment ||
+      "",
+
     amount: record.amount || record.fee || record.price || null,
   };
 }
 
 export async function GET(request) {
   try {
+ 
+    // 1. Authenticate owner
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.id) {
@@ -145,41 +176,63 @@ export async function GET(request) {
       );
     }
 
+    // 2. Read request parameters
     const { searchParams } = new URL(request.url);
+
     const requestedMemberId = searchParams.get("memberId");
     const requestedBusinessId = searchParams.get("businessId");
     const requestedCategory = searchParams.get("category");
 
     if (
       requestedCategory &&
-      !Object.prototype.hasOwnProperty.call(CATEGORIES, requestedCategory)
+      !Object.prototype.hasOwnProperty.call(
+        CATEGORIES,
+        requestedCategory
+      )
     ) {
       return json(
-        { success: false, message: "Invalid business category." },
+        {
+          success: false,
+          message: "Invalid business category.",
+        },
         400
       );
     }
 
-    if (requestedBusinessId && !ObjectId.isValid(requestedBusinessId)) {
+    if (
+      requestedBusinessId &&
+      !ObjectId.isValid(requestedBusinessId)
+    ) {
       return json(
-        { success: false, message: "Invalid business ID." },
+        {
+          success: false,
+          message: "Invalid business ID.",
+        },
         400
       );
     }
 
+    // 3. Connect database
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
 
     const owners = db.collection("owners");
     const teamCollection = db.collection("team");
 
-    // 1. Authenticate owner
-    const ownerConditions = [{ _id: session.user.id }];
+    // 4. Find owner
+    const ownerConditions = [
+      { _id: session.user.id },
+    ];
+
     if (ObjectId.isValid(session.user.id)) {
-      ownerConditions.push({ _id: new ObjectId(session.user.id) });
+      ownerConditions.push({
+        _id: new ObjectId(session.user.id),
+      });
     }
 
-    const owner = await owners.findOne({ $or: ownerConditions });
+    const owner = await owners.findOne({
+      $or: ownerConditions,
+    });
 
     if (!owner) {
       return json(
@@ -191,16 +244,23 @@ export async function GET(request) {
       );
     }
 
-    // 2. Read business references from the owner document
+    // 5. Read business references
     const ownerBusinesses = Array.isArray(owner.business)
       ? owner.business
       : [];
 
     const linkedBusinesses = ownerBusinesses
-      .filter((item) => item && typeof item === "object")
+      .filter(
+        (item) =>
+          item && typeof item === "object"
+      )
       .map((item) => {
         const businessId = normalizeId(item.businessId);
-        const collection = String(item.collection || "").toLowerCase();
+
+        const collection = String(
+          item.collection || ""
+        ).toLowerCase();
+
         const category = COLLECTION_CATEGORIES[collection];
 
         return {
@@ -210,7 +270,9 @@ export async function GET(request) {
         };
       })
       .filter((item) => {
-        if (!item.businessId || !item.category) return false;
+        if (!item.businessId || !item.category) {
+          return false;
+        }
 
         if (
           requestedBusinessId &&
@@ -237,20 +299,28 @@ export async function GET(request) {
       });
     }
 
-    // 3. FETCH SINGLE MEMBER PROFILE & ASSIGNED CUSTOMERS
+    // 6. FETCH SINGLE MEMBER PROFILE & CUSTOMERS
     if (requestedMemberId) {
       const memberIdValues = [requestedMemberId];
+
       if (ObjectId.isValid(requestedMemberId)) {
-        memberIdValues.push(new ObjectId(requestedMemberId));
+        memberIdValues.push(
+          new ObjectId(requestedMemberId)
+        );
       }
 
       const rawMember = await teamCollection.findOne({
-        _id: { $in: memberIdValues },
+        _id: {
+          $in: memberIdValues,
+        },
       });
 
       if (!rawMember) {
         return json(
-          { success: false, message: "Team member not found." },
+          {
+            success: false,
+            message: "Team member not found.",
+          },
           404
         );
       }
@@ -261,27 +331,32 @@ export async function GET(request) {
 
       // Validate owner access
       const authorizedBusiness = linkedBusinesses.find(
-        (b) => b.businessId === memberBusinessId
+        (business) =>
+          business.businessId === memberBusinessId
       );
 
       if (!authorizedBusiness) {
         return json(
           {
             success: false,
-            message: "You are not authorized to view this team member.",
+            message:
+              "You are not authorized to view this team member.",
           },
           403
         );
       }
 
       const { collection, category } = authorizedBusiness;
+
       let business = {};
 
       if (ObjectId.isValid(memberBusinessId)) {
         business =
           (await db
             .collection(collection)
-            .findOne({ _id: new ObjectId(memberBusinessId) })) || {};
+            .findOne({
+              _id: new ObjectId(memberBusinessId),
+            })) || {};
       }
 
       const normalizedMemberProfile = normalizeMember(
@@ -291,7 +366,7 @@ export async function GET(request) {
         memberBusinessId
       );
 
-      // Search appointments & bookings for customers handled by this member
+      // Search appointments and bookings
       const appointmentQuery = {
         $or: [
           { doctorId: { $in: memberIdValues } },
@@ -301,11 +376,21 @@ export async function GET(request) {
       };
 
       const [appointments, bookings] = await Promise.all([
-        db.collection("appointments").find(appointmentQuery).toArray(),
-        db.collection("bookings").find(appointmentQuery).toArray(),
+        db
+          .collection("appointments")
+          .find(appointmentQuery)
+          .toArray(),
+
+        db
+          .collection("bookings")
+          .find(appointmentQuery)
+          .toArray(),
       ]);
 
-      const customers = [...appointments, ...bookings].map(normalizeCustomer);
+      const customers = [
+        ...appointments,
+        ...bookings,
+      ].map(normalizeCustomer);
 
       return json({
         success: true,
@@ -315,26 +400,43 @@ export async function GET(request) {
       });
     }
 
-    // 4. FETCH ALL TEAM MEMBERS
+    // 7. FETCH ALL TEAM MEMBERS
     const team = [];
     const businessCache = new Map();
 
     for (const linkedBusiness of linkedBusinesses) {
-      const { businessId, collection, category } = linkedBusiness;
+      const {
+        businessId,
+        collection,
+        category,
+      } = linkedBusiness;
 
       const businessIdValues = [businessId];
+
       if (ObjectId.isValid(businessId)) {
-        businessIdValues.push(new ObjectId(businessId));
+        businessIdValues.push(
+          new ObjectId(businessId)
+        );
       }
 
       const memberQuery = {
         $or: [
-          { clinicId: { $in: businessIdValues } },
-          { businessId: { $in: businessIdValues } },
+          {
+            clinicId: {
+              $in: businessIdValues,
+            },
+          },
+          {
+            businessId: {
+              $in: businessIdValues,
+            },
+          },
         ],
       };
 
-      const members = await teamCollection.find(memberQuery).toArray();
+      const members = await teamCollection
+        .find(memberQuery)
+        .toArray();
 
       let business = {};
 
@@ -377,7 +479,7 @@ export async function GET(request) {
       }
     }
 
-    // Remove duplicates
+    // 8. Remove duplicate team members
     const uniqueTeam = Array.from(
       new Map(
         team.map((member) => [
@@ -393,7 +495,10 @@ export async function GET(request) {
       total: uniqueTeam.length,
     });
   } catch (error) {
-    console.error("GET /api/owner/team-members error:", error);
+    console.error(
+      "GET /api/owner/team-members error:",
+      error
+    );
 
     return json(
       {

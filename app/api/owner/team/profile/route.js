@@ -6,7 +6,7 @@ import { ObjectId } from "mongodb";
 import clientPromise from "@/lib/mongodb";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-export const dynamic = "force-dynamic";
+
 
 const TEAM_ROLES = ["doctor", "staff"];
 

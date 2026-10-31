@@ -298,7 +298,7 @@ function TeamMembersContent() {
         params.set("category", selectedCategory);
       }
 
-      const url = `/api/owner/team-members?${params.toString()}`;
+      const url = `/api/owner/teamMembers?${params.toString()}`;
 
       // Cache is isolated by user AND endpoint/filter combination.
       const cacheKey = `${ownerKey}:${url}`;
