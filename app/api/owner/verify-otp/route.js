@@ -1,8 +1,9 @@
+
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import clientPromise from "@/lib/mongodb";
 
- 
+
 
 export async function POST(req) {
   try {
@@ -15,7 +16,10 @@ export async function POST(req) {
       );
     }
 
-    const email = String(body.email || "").trim().toLowerCase();
+    const email = String(body.email || "")
+      .trim()
+      .toLowerCase();
+
     const otp = String(body.otp || "").trim();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -24,6 +28,9 @@ export async function POST(req) {
         { status: 400 }
       );
     }
+
+   
+    
 
     if (!/^\d{6}$/.test(otp)) {
       return NextResponse.json(
@@ -41,6 +48,7 @@ export async function POST(req) {
 
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
+
     const owners = db.collection("owners");
 
     const now = new Date();
@@ -50,6 +58,7 @@ export async function POST(req) {
       .update(otp)
       .digest("hex");
 
+    // Atomically verify OTP and activate the account.
     const result = await owners.updateOne(
       {
         email,
@@ -64,6 +73,7 @@ export async function POST(req) {
           verifiedAt: now,
           updatedAt: now,
         },
+
         $unset: {
           expiresAt: "",
           otpExpiresAt: "",
@@ -89,6 +99,7 @@ export async function POST(req) {
       },
       { status: 200 }
     );
+
   } catch (error) {
     console.error("Owner OTP verification error:", error);
 

@@ -36,6 +36,7 @@ export default function AuthContainer({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [agreed, setAgreed] = useState(false);
 
   const [isForgotPasswordOpen, setIsForgotPasswordOpen] =
     useState(false);
@@ -73,7 +74,7 @@ export default function AuthContainer({
 
     try {
       document.cookie = [
-        `zeric_login_role=${role}`,
+        `zeriy_login_role=${role}`,
         "Path=/",
         "Max-Age=600",
         "SameSite=Lax",
@@ -128,6 +129,11 @@ export default function AuthContainer({
       }
 
       toast.success("Login successful.");
+      setIdentifier("");
+setPassword("");
+setConfirmPassword("");
+setShowPassword(false);
+setAgreed(false);
 
       if (onLoginSuccess) {
         onLoginSuccess(user);
@@ -201,19 +207,25 @@ export default function AuthContainer({
           result.error || result.message || "Registration failed."
         );
       }
+      setName("");
+setEmail("");
+setPhone("");
+setPassword("");
+setConfirmPassword("");
+setIdentifier("");
+setShowPassword(false);
+setAgreed(false);
 
       sessionStorage.setItem(
-        "zeric_registration",
+        "zeriy_registration",
         JSON.stringify({
           name: name.trim(),
           email: normalizedEmail,
+          password:password,
           phone: normalizedPhone,
         })
       );
 
-      toast.success(
-        result.message || "Registration successful. Verify your email."
-      );
 
       router.push(
         `/verify-otp?email=${encodeURIComponent(normalizedEmail)}`
@@ -244,7 +256,7 @@ export default function AuthContainer({
           <div className="mx-auto mb-4 flex h-[60px] w-[60px] items-center justify-center overflow-hidden rounded-2xl bg-indigo-600 shadow-lg shadow-indigo-600/20">
             <Image
               src="/logo.png"
-              alt="Zeric Logo"
+              alt="Zeriy Logo"
               width={52}
               height={52}
               className="h-full w-full object-contain"
@@ -253,7 +265,7 @@ export default function AuthContainer({
           </div>
 
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-            {isRegister ? "Create your account" : "Welcome to Zeric"}
+            {isRegister ? "Create your account" : "Welcome to Zeriy"}
           </h1>
 
           <p className="mt-2 text-sm text-slate-500">
@@ -492,24 +504,27 @@ export default function AuthContainer({
               <button
                 type="button"
                 onClick={() => setIsForgotPasswordOpen(true)}
-                className="text-xs font-semibold text-indigo-600 hover:text-indigo-700"
+                className="-mt-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:underline"
               >
                 Forgot password?
               </button>
             </div>
           )}
-            <div className="flex items-start gap-2">
+          
+            <div className="flex items-start gap-2 mt-8">
   <input
-    type="checkbox"
-    required
-    name="agree"
-    id="agree"
-    className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-2 focus:ring-indigo-500"
-  />
+  type="checkbox"
+  required
+  name="agree"
+  id="agree"
+  checked={agreed}
+  onChange={(e) => setAgreed(e.target.checked)}
+  className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600"
+/>
 
   <label
     htmlFor="agree"
-    className="text-sm leading-5 text-gray-600"
+    className="mt-1 text-sm leading-5 text-gray-600"
   >
     I agree to the{" "}
     <a

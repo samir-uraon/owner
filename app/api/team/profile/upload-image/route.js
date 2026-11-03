@@ -76,7 +76,7 @@ export async function POST(request) {
 
     // 4. Create a signed Cloudinary upload
     const timestamp = Math.floor(Date.now() / 1000);
-    const folder = "zeric/team-profiles";
+    const folder = "zeriy/team-profiles";
 
     const signatureString =
       `folder=${folder}&timestamp=${timestamp}${apiSecret}`;

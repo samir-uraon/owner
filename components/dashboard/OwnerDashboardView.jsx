@@ -790,9 +790,9 @@ export default function OwnerDashboardView({ role = "doctor" }) {
       >
         <div className="flex h-[70px] shrink-0 items-center justify-between border-b border-slate-100 px-5">
           <button type="button" onClick={() => navigate("overview")} className="flex min-w-0 items-center gap-3">
-            <Image src="/logo.png" alt="Zeric" width={42} height={42} priority className="h-9 w-9 rounded-lg object-contain" />
+            <Image src="/logo.png" alt="Zeriy" width={42} height={42} priority className="h-9 w-9 rounded-lg object-contain" />
             <div className="min-w-0">
-              <p className="text-lg font-extrabold tracking-tight text-slate-900">Zeric</p>
+              <p className="text-lg font-extrabold tracking-tight text-slate-900">Zeriy</p>
               <p className="text-[11px] font-medium text-slate-500">Owner View Mode</p>
             </div>
           </button>
@@ -1034,7 +1034,7 @@ export default function OwnerDashboardView({ role = "doctor" }) {
           )}
 
           <footer className="flex flex-col gap-2 border-t border-slate-200 py-4 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
-            <p>© {new Date().getFullYear()} Zeric. All rights reserved.</p>
+            <p>© {new Date().getFullYear()} Zeriy. All rights reserved.</p>
             <p>Owner Dashboard Mode</p>
           </footer>
         </main>

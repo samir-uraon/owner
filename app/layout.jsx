@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "ZERIC — Owner & Staff Portal | Made Simpler And Much Faster",
+  title: "ZERIY — Owner & Staff Portal | Made Simpler And Much Faster",
   description:
     "Manage queues, daily staff/doctor shifts, and terminal counters for saloons, parlours, clinics, and diagnostic centres.",
   icons: {

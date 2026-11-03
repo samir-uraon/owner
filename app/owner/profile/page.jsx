@@ -1538,7 +1538,7 @@ function BusinessProfileContent() {
           <div className="flex items-center gap-2">
             <Image
               src="/logo.png"
-              alt="Zeric"
+              alt="Zeriy"
               width={35}
               height={35}
               priority
@@ -1546,7 +1546,7 @@ function BusinessProfileContent() {
             />
 
             <span className="font-extrabold tracking-tight">
-              Zeric
+              Zeriy
               <span className="text-indigo-600">.</span>
             </span>
           </div>
@@ -3103,7 +3103,7 @@ function BusinessProfileContent() {
         )}
 
         <p className="mt-8 text-center text-xs text-slate-400">
-          © {new Date().getFullYear()} Zeric · Made Simpler &amp; Much Faster
+          © {new Date().getFullYear()} Zeriy · Made Simpler &amp; Much Faster
         </p>
       </div>
     </main>

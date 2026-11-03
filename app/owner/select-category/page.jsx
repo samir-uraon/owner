@@ -414,7 +414,7 @@ const handleContinue = useCallback(() => {
       </main>
 
       <footer className="px-4 py-6 text-center text-xs text-slate-400">
-        ZERIC © 2026 · Made Simpler And Much Faster
+        ZERIY © 2026 · Made Simpler And Much Faster
       </footer>
     </div>
   );

@@ -493,7 +493,7 @@ export default function ForgotPasswordModal({
 
             <div>
               <p className="text-base font-bold tracking-tight text-slate-900">
-                Zeric
+                Zeriy
               </p>
               <p className="mt-0.5 text-xs text-slate-500">{roleLabel}</p>
             </div>

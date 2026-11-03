@@ -143,7 +143,7 @@ export async function POST(request) {
     const uploadedImage = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         {
-          folder: `zeric/businesses/${category}`,
+          folder: `zeriy/businesses/${category}`,
           resource_type: "image",
           transformation: [
             { width: 1200, height: 900, crop: "limit" },

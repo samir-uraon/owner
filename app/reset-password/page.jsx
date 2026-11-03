@@ -92,7 +92,7 @@ export default function ResetPasswordPage() {
           className="mb-8 inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-indigo-600"
         >
           <ArrowLeft size={17} />
-          Back to Zeric
+          Back to Zeriy
         </Link>
 
         <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-200/50">
@@ -112,7 +112,7 @@ export default function ResetPasswordPage() {
             <p className="mt-2 text-sm leading-6 text-indigo-100">
               {success
                 ? "Your password has been changed successfully."
-                : "Create a new password for your Zeric account."}
+                : "Create a new password for your Zeriy account."}
             </p>
           </div>
 
@@ -274,7 +274,7 @@ export default function ResetPasswordPage() {
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-400">
-          Zeric · Made Simpler &amp; Much Faster
+          Zeriy · Made Simpler &amp; Much Faster
         </p>
       </div>
     </main>

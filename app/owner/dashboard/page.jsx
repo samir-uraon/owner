@@ -257,11 +257,11 @@ useEffect(() => {
       type="button"
       onClick={() => router.push("/owner/dashboard")}
       className="flex min-w-0 shrink items-center gap-2 sm:gap-2.5"
-      aria-label="Zeric dashboard"
+      aria-label="Zeriy dashboard"
     >
       <Image
         src="/logo.png"
-        alt="Zeric"
+        alt="Zeriy"
         width={35}
         height={35}
         priority
@@ -269,7 +269,7 @@ useEffect(() => {
       />
 
       <span className="truncate text-lg font-extrabold tracking-tight text-slate-900 sm:text-xl">
-        Zeric<span className="text-indigo-600">.</span>
+        Zeriy<span className="text-indigo-600">.</span>
       </span>
     </button>
 
@@ -518,7 +518,7 @@ useEffect(() => {
             <h3 className="mt-5 text-lg font-bold">Your workspace is empty</h3>
             <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">
               Add your first business to manage its details and get started
-              with Zeric.
+              with Zeriy.
             </p>
             <button
               onClick={() => router.push("/owner/select-category")}
@@ -640,7 +640,7 @@ useEffect(() => {
         )}
 
         <footer className="mt-12 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-5 text-xs text-slate-400">
-          <span>© {new Date().getFullYear()} Zeric</span>
+          <span>© {new Date().getFullYear()} Zeriy</span>
           <span>Made Simpler &amp; Much Faster</span>
         </footer>
       </main>

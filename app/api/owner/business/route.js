@@ -2,17 +2,23 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { v2 as cloudinary } from "cloudinary";
 import clientPromise from "@/lib/mongodb";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { ObjectId } from "mongodb";
- 
-
- 
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MAX_PROOF_SIZE = 5 * 1024 * 1024;
 
 const ALLOWED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+];
+
+const ALLOWED_PROOF_TYPES = [
+  "application/pdf",
   "image/jpeg",
   "image/png",
   "image/webp",
@@ -47,13 +53,19 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function isCloudinaryConfigured() {
+  return Boolean(
+    process.env.CLOUDINARY_CLOUD_NAME &&
+    process.env.CLOUDINARY_API_KEY &&
+    process.env.CLOUDINARY_API_SECRET
+  );
+}
 
-
-function uploadToCloudinary(buffer, mimetype) {
+function uploadImageToCloudinary(buffer, mimetype) {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
-        folder: "zeric/businesses",
+        folder: "zeriy/businesses",
         resource_type: "image",
         allowed_formats: ["jpg", "jpeg", "png", "webp"],
         transformation: [
@@ -66,7 +78,7 @@ function uploadToCloudinary(buffer, mimetype) {
           },
         ],
         context: {
-          source: "zeric-business-registration",
+          source: "zeriy-business-registration",
           original_mimetype: mimetype,
         },
       },
@@ -77,13 +89,14 @@ function uploadToCloudinary(buffer, mimetype) {
         }
 
         if (!result?.secure_url || !result?.public_id) {
-          reject(new Error("Cloudinary did not return an image URL."));
+          reject(new Error("Cloudinary image upload failed."));
           return;
         }
 
         resolve({
-          imageUrl: result.secure_url,
-          imagePublicId: result.public_id,
+          url: result.secure_url,
+          publicId: result.public_id,
+          resourceType: "image",
         });
       }
     );
@@ -92,12 +105,112 @@ function uploadToCloudinary(buffer, mimetype) {
   });
 }
 
+function uploadProofToCloudinary(buffer, mimetype) {
+  const isPdf = mimetype === "application/pdf";
+  const resourceType = isPdf ? "raw" : "image";
+
+  return new Promise((resolve, reject) => {
+    const options = {
+      folder: "zeriy/business-identity-proofs",
+      resource_type: resourceType,
+      public_id: isPdf
+        ? `shop-proof-${randomUUID()}.pdf`
+        : `shop-proof-${randomUUID()}`,
+      context: {
+        source: "zeriy-business-registration",
+        original_mimetype: mimetype,
+      },
+    };
+
+    if (!isPdf) {
+      options.allowed_formats = ["jpg", "jpeg", "png", "webp"];
+    }
+
+    const stream = cloudinary.uploader.upload_stream(
+      options,
+      (error, result) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        if (!result?.secure_url || !result?.public_id) {
+          reject(new Error("Cloudinary identity proof upload failed."));
+          return;
+        }
+
+        resolve({
+          url: result.secure_url,
+          publicId: result.public_id,
+          resourceType,
+        });
+      }
+    );
+
+    Readable.from(buffer).pipe(stream);
+  });
+}
+
+function validateImageSignature(buffer, mimetype) {
+  const isJpeg =
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff;
+
+  const isPng =
+    buffer.length >= 8 &&
+    buffer.subarray(0, 8).equals(
+      Buffer.from([
+        0x89, 0x50, 0x4e, 0x47,
+        0x0d, 0x0a, 0x1a, 0x0a,
+      ])
+    );
+
+  const isWebp =
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP";
+
+  return (
+    (mimetype === "image/jpeg" && isJpeg) ||
+    (mimetype === "image/png" && isPng) ||
+    (mimetype === "image/webp" && isWebp)
+  );
+}
+
+function validateProofSignature(buffer, mimetype) {
+  if (mimetype === "application/pdf") {
+    return (
+      buffer.length >= 5 &&
+      buffer.toString("ascii", 0, 5) === "%PDF-"
+    );
+  }
+
+  return validateImageSignature(buffer, mimetype);
+}
+
+async function cleanupCloudinaryUploads(uploads) {
+  for (const upload of uploads) {
+    if (!upload?.publicId) continue;
+
+    try {
+      await cloudinary.uploader.destroy(upload.publicId, {
+        resource_type: upload.resourceType,
+      });
+    } catch (error) {
+      console.error("Cloudinary cleanup error:", error);
+    }
+  }
+}
+
 export async function POST(req) {
   let db;
   let businessCollection;
   let businessId;
   let ownerId;
-  let cloudinaryPublicId;
+
+  const uploadedAssets = [];
 
   try {
     const session = await getServerSession(authOptions);
@@ -114,6 +227,7 @@ export async function POST(req) {
 
     let body;
     let imageFile = null;
+    let proofFile = null;
 
     const contentType = req.headers.get("content-type") || "";
 
@@ -143,15 +257,24 @@ export async function POST(req) {
         );
       }
 
-      const uploadedFile = formData.get("businessImage");
+      const uploadedImage = formData.get("businessImage");
 
       if (
-        uploadedFile &&
-        typeof uploadedFile === "object" &&
-        typeof uploadedFile.arrayBuffer === "function" &&
-        uploadedFile.size > 0
+        uploadedImage &&
+        typeof uploadedImage.arrayBuffer === "function" &&
+        uploadedImage.size > 0
       ) {
-        imageFile = uploadedFile;
+        imageFile = uploadedImage;
+      }
+
+      const uploadedProof = formData.get("shopIdentityProof");
+
+      if (
+        uploadedProof &&
+        typeof uploadedProof.arrayBuffer === "function" &&
+        uploadedProof.size > 0
+      ) {
+        proofFile = uploadedProof;
       }
     } else {
       body = await req.json();
@@ -167,6 +290,17 @@ export async function POST(req) {
       );
     }
 
+    // Identity proof is mandatory.
+    if (!proofFile) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Please upload your shop identity proof.",
+        },
+        { status: 400 }
+      );
+    }
+
     const {
       category,
       businessName,
@@ -175,7 +309,6 @@ export async function POST(req) {
       address,
       city,
       pincode,
-       
     } = body;
 
     const categoryConfig = categories[category];
@@ -274,9 +407,6 @@ export async function POST(req) {
       );
     }
 
- 
-  
-
     const lat = Number(body.lat ?? body.latitude);
     const lng = Number(body.lng ?? body.longitude);
 
@@ -297,13 +427,13 @@ export async function POST(req) {
       );
     }
 
-    // Validate the image before uploading it.
+    // Validate optional business image.
     if (imageFile) {
       if (!ALLOWED_IMAGE_TYPES.includes(imageFile.type)) {
         return NextResponse.json(
           {
             success: false,
-            message: "Only JPG, PNG, and WebP images are allowed.",
+            message: "Only JPG, PNG, and WebP business images are allowed.",
           },
           { status: 400 }
         );
@@ -320,13 +450,28 @@ export async function POST(req) {
       }
     }
 
-    // Ensure Cloudinary is configured on the server.
-    if (
-      imageFile &&
-      (!process.env.CLOUDINARY_CLOUD_NAME ||
-        !process.env.CLOUDINARY_API_KEY ||
-        !process.env.CLOUDINARY_API_SECRET)
-    ) {
+    // Validate mandatory identity proof.
+    if (!ALLOWED_PROOF_TYPES.includes(proofFile.type)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Identity proof must be PDF, JPG, PNG, or WebP.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (proofFile.size > MAX_PROOF_SIZE) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Shop identity proof must be 5 MB or smaller.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!isCloudinaryConfigured()) {
       throw new Error("Cloudinary environment variables are missing.");
     }
 
@@ -367,99 +512,110 @@ export async function POST(req) {
     businessCollection = categoryConfig.collection;
 
     let imageData = {
-      imageUrl: "",
-      imagePublicId: "",
+      url: "",
+      publicId: "",
+      resourceType: "image",
     };
 
+    // Upload optional business image.
     if (imageFile) {
       const buffer = Buffer.from(await imageFile.arrayBuffer());
 
-      // Check the actual file signature, not only its MIME type.
-      const isJpeg =
-        buffer.length >= 3 &&
-        buffer[0] === 0xff &&
-        buffer[1] === 0xd8 &&
-        buffer[2] === 0xff;
-
-      const isPng =
-        buffer.length >= 8 &&
-        buffer.subarray(0, 8).equals(
-          Buffer.from([
-            0x89, 0x50, 0x4e, 0x47,
-            0x0d, 0x0a, 0x1a, 0x0a,
-          ])
-        );
-
-      const isWebp =
-        buffer.length >= 12 &&
-        buffer.toString("ascii", 0, 4) === "RIFF" &&
-        buffer.toString("ascii", 8, 12) === "WEBP";
-
-      const validSignature =
-        (imageFile.type === "image/jpeg" && isJpeg) ||
-        (imageFile.type === "image/png" && isPng) ||
-        (imageFile.type === "image/webp" && isWebp);
-
-      if (!validSignature) {
+      if (!validateImageSignature(buffer, imageFile.type)) {
         return NextResponse.json(
           {
             success: false,
-            message: "The selected file is not a valid supported image.",
+            message: "The selected business image is invalid.",
           },
           { status: 400 }
         );
       }
 
-      imageData = await uploadToCloudinary(buffer, imageFile.type);
-      cloudinaryPublicId = imageData.imagePublicId;
+      imageData = await uploadImageToCloudinary(
+        buffer,
+        imageFile.type
+      );
+
+      uploadedAssets.push(imageData);
     }
 
-  const now = new Date();
+    // Upload mandatory shop identity proof.
+    const proofBuffer = Buffer.from(
+      await proofFile.arrayBuffer()
+    );
 
+    if (!validateProofSignature(proofBuffer, proofFile.type)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "The selected identity proof is not a valid file.",
+        },
+        { status: 400 }
+      );
+    }
 
+    const proofData = await uploadProofToCloudinary(
+      proofBuffer,
+      proofFile.type
+    );
 
-const businessData = {
- 
-  ownerId,
-  ownerName: owner.name || session.user.name || "",
-  ownerEmail: normalizedEmail,
-  category,
-  categoryName: categoryConfig.title,
-  name: businessName.trim(),
-  phone: phone.trim(),
-  email: businessEmail,
-  address: address.trim(),
-  lat,
-  lng,
- 
-  imageUrl: imageData.imageUrl,
-  imagePublicId: imageData.imagePublicId,
-  setupCompleted: false,
-  createdAt: now,
-  updatedAt: now,
-};
+    uploadedAssets.push(proofData);
 
-const insertResult = await db
-  .collection(businessCollection)
-  .insertOne(businessData);
+    const now = new Date();
+
+    const businessData = {
+      ownerId,
+      ownerName: owner.name || session.user.name || "",
+      ownerEmail: normalizedEmail,
+
+      category,
+      categoryName: categoryConfig.title,
+
+      name: businessName.trim(),
+      phone: phone.trim(),
+      email: businessEmail,
+
+      address: address.trim(),
+      city: typeof city === "string" ? city.trim() : "",
+      pincode:
+        typeof pincode === "string" ? pincode.trim() : "",
+
+      lat,
+      lng,
+
+      imageUrl: imageData.url,
+      imagePublicId: imageData.publicId,
+
+      // Shop identity proof.
+      shopIdentityProofUrl: proofData.url,
+      shopIdentityProofPublicId: proofData.publicId,
+      shopIdentityProofType: proofFile.type,
+
+      setupCompleted: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const insertResult = await db
+      .collection(businessCollection)
+      .insertOne(businessData);
 
     businessId = insertResult.insertedId;
 
     const updateResult = await db.collection("owners").updateOne(
-  { _id: ownerId },
-  {
-    $addToSet: {
-      business: {
-        businessId,
-        collection: categories[category].collection,
-      },
-    },
-    $set: {
-      updatedAt: now,
-    },
-  }
-);
-
+      { _id: ownerId },
+      {
+        $addToSet: {
+          business: {
+            businessId,
+            collection: businessCollection,
+          },
+        },
+        $set: {
+          updatedAt: now,
+        },
+      }
+    );
 
     if (updateResult.matchedCount !== 1) {
       throw new Error("Could not link business to owner.");
@@ -472,7 +628,8 @@ const insertResult = await db
         businessId: businessId.toString(),
         category,
         categoryName: categoryConfig.title,
-        imageUrl: imageData.imageUrl,
+        imageUrl: imageData.url,
+        shopIdentityProofUrl: proofData.url,
         nextRoute: "/owner/dashboard",
       },
       { status: 201 }
@@ -480,6 +637,7 @@ const insertResult = await db
   } catch (error) {
     console.error("Create business error:", error);
 
+    // Roll back business if it was already inserted.
     if (db && businessCollection && businessId) {
       try {
         await db.collection(businessCollection).deleteOne({
@@ -491,7 +649,10 @@ const insertResult = await db
             { _id: ownerId },
             {
               $pull: {
-                business: businessId,
+                business: {
+                  businessId,
+                  collection: businessCollection,
+                },
               },
             }
           );
@@ -501,16 +662,8 @@ const insertResult = await db
       }
     }
 
-    // Remove the uploaded image if saving the business failed.
-    if (cloudinaryPublicId) {
-      try {
-        await cloudinary.uploader.destroy(cloudinaryPublicId, {
-          resource_type: "image",
-        });
-      } catch (cleanupError) {
-        console.error("Cloudinary cleanup error:", cleanupError);
-      }
-    }
+    // Remove all uploaded Cloudinary assets after failure.
+    await cleanupCloudinaryUploads(uploadedAssets);
 
     return NextResponse.json(
       {
@@ -521,11 +674,6 @@ const insertResult = await db
     );
   }
 }
-
-
-
-
-
 
 export async function GET() {
   try {
@@ -560,9 +708,6 @@ export async function GET() {
       }
     );
 
-  
-    
-
     if (!owner) {
       return NextResponse.json(
         { error: "Owner account not found." },
@@ -574,7 +719,6 @@ export async function GET() {
       ? owner.business
       : [];
 
-   
     const businesses = await Promise.all(
       references.map(async (reference) => {
         if (!reference || typeof reference !== "object") {
@@ -585,22 +729,26 @@ export async function GET() {
           reference.collection || ""
         ).trim();
 
-        if (!collectionName || !reference.businessId) {
+        if (
+          !Object.values(categories).some(
+            (item) => item.collection === collectionName
+          ) ||
+          !reference.businessId
+        ) {
           return null;
         }
 
-         
-      
+        const businessObjectId =
+          reference.businessId instanceof ObjectId
+            ? reference.businessId
+            : new ObjectId(reference.businessId);
 
         const business = await db
           .collection(collectionName)
           .findOne({
-            _id: new ObjectId(reference.businessId),
-           ownerId:owner._id
+            _id: businessObjectId,
+            ownerId: owner._id,
           });
-
-                
-           
 
         if (!business) {
           return null;
@@ -610,17 +758,13 @@ export async function GET() {
 
         return {
           ...businessData,
-          _id: _id.toString(),   
+          _id: _id.toString(),
           collection: collectionName,
           businessName:
             business.businessName || business.name || "",
         };
       })
     );
-
-
-   
-    
 
     const validBusinesses = businesses
       .filter(Boolean)
@@ -630,8 +774,6 @@ export async function GET() {
           new Date(a.createdAt || 0).getTime()
       );
 
-    
-      
     return NextResponse.json({
       success: true,
       businesses: validBusinesses,

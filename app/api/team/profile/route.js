@@ -102,13 +102,8 @@ function getIndiaDateString(date = new Date()) {
 
 /**
  * Validates multiple holiday dates.
- *
  * Accepted format: YYYY-MM-DD
  * Maximum: 365 unique dates
- *
- * Returns:
- * - An array of unique, sorted dates if valid.
- * - null if invalid.
  */
 function normalizeHolidayDates(dates) {
   if (!Array.isArray(dates)) {
@@ -153,7 +148,6 @@ function normalizeHolidayDates(dates) {
 
 /**
  * Returns only today and future holiday dates.
- * Past dates automatically disappear from the profile response.
  */
 function getActiveHolidayDates(dates) {
   const today = getIndiaDateString();
@@ -170,15 +164,10 @@ function getActiveHolidayDates(dates) {
 
 /**
  * Finds the authenticated doctor/staff account.
- * Prefers the actual team document ID, then custom IDs,
- * and finally the authenticated email.
  */
 async function getTeamMember(team, sessionUser) {
   const role = normalizeRole(sessionUser.role);
-
-  const id = String(
-    sessionUser.id || sessionUser._id || ""
-  ).trim();
+  const id = String(sessionUser.id || sessionUser._id || "").trim();
 
   if (id) {
     const identityConditions = [];
@@ -200,9 +189,7 @@ async function getTeamMember(team, sessionUser) {
     });
 
     if (member) {
-      return normalizeRole(member.role) === role
-        ? member
-        : null;
+      return normalizeRole(member.role) === role ? member : null;
     }
   }
 
@@ -240,7 +227,6 @@ async function getTeamMember(team, sessionUser) {
 
 /**
  * Resolves the business name from the correct collection.
- * Supports MongoDB ObjectId and custom string business IDs.
  */
 async function getBusinessName(db, member) {
   const category = String(member.category || "")
@@ -248,20 +234,15 @@ async function getBusinessName(db, member) {
     .toLowerCase();
 
   const config = CATEGORY_CONFIG[category];
-
   if (!config) return "";
 
   const businessId =
     config.idFields
       .map((field) => member[field])
-      .find(
-        (value) => value != null && String(value).trim()
-      ) ??
+      .find((value) => value != null && String(value).trim()) ??
     BUSINESS_ID_FIELDS
       .map((field) => member[field])
-      .find(
-        (value) => value != null && String(value).trim()
-      );
+      .find((value) => value != null && String(value).trim());
 
   if (businessId == null) return "";
 
@@ -315,7 +296,7 @@ async function getBusinessName(db, member) {
 }
 
 /**
- * Converts the MongoDB team document to the public profile.
+ * Converts the MongoDB team document to the public profile representation.
  */
 function serializeProfile(member, businessName = "") {
   return {
@@ -326,9 +307,7 @@ function serializeProfile(member, businessName = "") {
     role: normalizeRole(member.role),
     category: member.category || "",
 
-    clinicId: member.clinicId
-      ? String(member.clinicId)
-      : "",
+    clinicId: member.clinicId ? String(member.clinicId) : "",
 
     businessName,
 
@@ -342,27 +321,15 @@ function serializeProfile(member, businessName = "") {
     experience: member.experience ?? null,
     specialization: member.specialization || "",
 
-    fee:
-      member.fee ??
-      member.checkupFee ??
-      member.charge ??
-      "",
+    fee: member.fee ?? member.checkupFee ?? member.charge ?? "",
 
-    duration:
-      member.duration ??
-      member.checkupDuration ??
-      null,
+    duration: member.duration ?? member.checkupDuration ?? null,
 
-    services: Array.isArray(member.services)
-      ? member.services
-      : [],
+    services: Array.isArray(member.services) ? member.services : [],
 
     schedule: member.schedule || {},
 
-    // Past holiday dates are never returned as active.
-    holidayDates: getActiveHolidayDates(
-      member.holidayDates
-    ),
+    holidayDates: getActiveHolidayDates(member.holidayDates),
   };
 }
 
@@ -374,10 +341,7 @@ async function getContext() {
 
   if (!session?.user) {
     return {
-      error: json(
-        { message: "Please log in first." },
-        401
-      ),
+      error: json({ message: "Please log in first." }, 401),
     };
   }
 
@@ -399,17 +363,11 @@ async function getContext() {
   const db = client.db(process.env.MONGODB);
   const team = db.collection("team");
 
-  const member = await getTeamMember(
-    team,
-    session.user
-  );
+  const member = await getTeamMember(team, session.user);
 
   if (!member) {
     return {
-      error: json(
-        { message: "Team member account not found." },
-        404
-      ),
+      error: json({ message: "Team member account not found." }, 404),
     };
   }
 
@@ -425,30 +383,19 @@ async function getContext() {
 export async function GET() {
   try {
     const context = await getContext();
-
     if (context.error) return context.error;
 
     const { db, member } = context;
-
-    const businessName = await getBusinessName(
-      db,
-      member
-    );
+    const businessName = await getBusinessName(db, member);
 
     return json({
       success: true,
-      profile: serializeProfile(
-        member,
-        businessName
-      ),
+      profile: serializeProfile(member, businessName),
     });
   } catch (error) {
     console.error("GET team profile error:", error);
 
-    return json(
-      { message: "Failed to load your profile." },
-      500
-    );
+    return json({ message: "Failed to load your profile." }, 500);
   }
 }
 
@@ -456,45 +403,30 @@ export async function GET() {
 export async function PUT(request) {
   try {
     const context = await getContext();
-
     if (context.error) return context.error;
 
-    const { db, member, role } = context;
+    const { db, team, member, role } = context;
 
     let body;
-
     try {
       body = await request.json();
     } catch {
-      return json(
-        { message: "Invalid JSON request body." },
-        400
-      );
+      return json({ message: "Invalid JSON request body." }, 400);
     }
 
-    if (
-      !body ||
-      typeof body !== "object" ||
-      Array.isArray(body)
-    ) {
-      return json(
-        { message: "Invalid request body." },
-        400
-      );
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return json({ message: "Invalid request body." }, 400);
     }
 
-    // Do not allow the request body to change the role.
     if (
       body.role !== undefined &&
       normalizeRole(body.role) !== role
     ) {
-      return json(
-        { message: "Forbidden: role mismatch." },
-        403
-      );
+      return json({ message: "Forbidden: role mismatch." }, 403);
     }
 
     const update = {};
+    const unset = {};
 
     // Name
     if (body.name !== undefined) {
@@ -520,10 +452,7 @@ export async function PUT(request) {
         .toLowerCase();
 
       if (email && !isValidEmail(email)) {
-        return json(
-          { message: "Please enter a valid email." },
-          400
-        );
+        return json({ message: "Please enter a valid email." }, 400);
       }
 
       update.email = email || null;
@@ -535,8 +464,7 @@ export async function PUT(request) {
 
     // Phone
     if (body.phone !== undefined) {
-      const phone = String(body.phone || "")
-        .replace(/\s+/g, "");
+      const phone = String(body.phone || "").replace(/\s+/g, "");
 
       if (phone && !isValidPhone(phone)) {
         return json(
@@ -557,10 +485,7 @@ export async function PUT(request) {
 
     // Experience
     if (body.experience !== undefined) {
-      if (
-        body.experience === null ||
-        body.experience === ""
-      ) {
+      if (body.experience === null || body.experience === "") {
         update.experience = null;
       } else {
         const experience = Number(body.experience);
@@ -583,11 +508,9 @@ export async function PUT(request) {
       }
     }
 
-    // Profile image: HTTPS Cloudinary URLs only
+    // Profile image handling: Updates MongoDB properly
     if (body.profileImage !== undefined) {
-      const imageUrl = String(
-        body.profileImage || ""
-      ).trim();
+      const imageUrl = String(body.profileImage || "").trim();
 
       if (imageUrl) {
         try {
@@ -615,17 +538,22 @@ export async function PUT(request) {
         }
 
         update.profileImage = imageUrl;
+        // Clean legacy fields so profileImage is canonical
+        if (Object.hasOwn(member, "image")) update.image = imageUrl;
+        if (Object.hasOwn(member, "imageUrl")) update.imageUrl = imageUrl;
+        if (Object.hasOwn(member, "photo")) update.photo = imageUrl;
       } else {
         update.profileImage = null;
+        if (Object.hasOwn(member, "image")) update.image = null;
+        if (Object.hasOwn(member, "imageUrl")) update.imageUrl = null;
+        if (Object.hasOwn(member, "photo")) update.photo = null;
       }
     }
 
     // Doctor-specific fields
     if (role === "doctor") {
       if (body.specialization !== undefined) {
-        const specialization = String(
-          body.specialization || ""
-        ).trim();
+        const specialization = String(body.specialization || "").trim();
 
         if (specialization.length > 150) {
           return json(
@@ -651,10 +579,7 @@ export async function PUT(request) {
       }
 
       if (body.duration !== undefined) {
-        if (
-          body.duration === null ||
-          body.duration === ""
-        ) {
+        if (body.duration === null || body.duration === "") {
           update.duration = null;
         } else {
           const duration = Number(body.duration);
@@ -692,11 +617,7 @@ export async function PUT(request) {
       for (const service of body.services) {
         if (typeof service === "string") {
           const name = service.trim();
-
-          if (name) {
-            normalizedServices.push(name);
-          }
-
+          if (name) normalizedServices.push(name);
           continue;
         }
 
@@ -707,7 +628,6 @@ export async function PUT(request) {
           typeof service.name === "string"
         ) {
           const name = service.name.trim();
-
           if (!name) continue;
 
           normalizedServices.push({
@@ -734,25 +654,14 @@ export async function PUT(request) {
         );
       }
 
-      // Remove duplicate string services.
       const seenStrings = new Set();
-
-      update.services = normalizedServices.filter(
-        (service) => {
-          if (typeof service !== "string") {
-            return true;
-          }
-
-          const key = service.toLowerCase();
-
-          if (seenStrings.has(key)) {
-            return false;
-          }
-
-          seenStrings.add(key);
-          return true;
-        }
-      );
+      update.services = normalizedServices.filter((service) => {
+        if (typeof service !== "string") return true;
+        const key = service.toLowerCase();
+        if (seenStrings.has(key)) return false;
+        seenStrings.add(key);
+        return true;
+      });
     }
 
     // Holidays
@@ -771,42 +680,34 @@ export async function PUT(request) {
         );
       }
 
-      update.holidayDates = getActiveHolidayDates(
-        normalizedDates
-      );
+      update.holidayDates = getActiveHolidayDates(normalizedDates);
     }
 
-    // Nothing to update
     if (Object.keys(update).length === 0) {
       return json(
-        {
-          message:
-            "No valid profile changes were provided.",
-        },
+        { message: "No valid profile changes were provided." },
         400
       );
     }
 
     update.updatedAt = new Date();
 
-    // Merge changes in-memory without saving to MongoDB
-    const updatedMember = {
-      ...member,
-      ...update,
-    };
+    // Key Fix: Persist updates directly into MongoDB
+    const mongoUpdateQuery = { $set: update };
+    if (Object.keys(unset).length > 0) {
+      mongoUpdateQuery.$unset = unset;
+    }
 
-    const businessName = await getBusinessName(
-      db,
-      updatedMember
-    );
+    await team.updateOne({ _id: member._id }, mongoUpdateQuery);
+
+    // Fetch the updated member document from MongoDB to verify changes
+    const updatedMember = await team.findOne({ _id: member._id });
+    const businessName = await getBusinessName(db, updatedMember);
 
     return json({
       success: true,
-      message: "Profile processed successfully.",
-      profile: serializeProfile(
-        updatedMember,
-        businessName
-      ),
+      message: "Profile updated successfully.",
+      profile: serializeProfile(updatedMember, businessName),
     });
   } catch (error) {
     console.error("PUT team profile error:", error);
@@ -819,11 +720,9 @@ export async function PUT(request) {
 }
 
 // DELETE /api/team/profile
-// Removes only the profile image, not the team account.
 export async function DELETE() {
   try {
     const context = await getContext();
-
     if (context.error) return context.error;
 
     const { db, team, member } = context;
@@ -843,10 +742,7 @@ export async function DELETE() {
       }
     );
 
-    const updatedMember = await team.findOne({
-      _id: member._id,
-    });
-
+    const updatedMember = await team.findOne({ _id: member._id });
     const businessName = updatedMember
       ? await getBusinessName(db, updatedMember)
       : "";
@@ -855,17 +751,11 @@ export async function DELETE() {
       success: true,
       message: "Profile image removed successfully.",
       profile: updatedMember
-        ? serializeProfile(
-            updatedMember,
-            businessName
-          )
+        ? serializeProfile(updatedMember, businessName)
         : null,
     });
   } catch (error) {
-    console.error(
-      "DELETE team profile image error:",
-      error
-    );
+    console.error("DELETE team profile image error:", error);
 
     return json(
       { message: "Failed to remove the profile image." },

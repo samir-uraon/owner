@@ -84,6 +84,14 @@ const ALLOWED_IMAGE_TYPES = [
 ];
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const ALLOWED_PROOF_TYPES = [
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+];
+
+const MAX_PROOF_SIZE = 5 * 1024 * 1024;
 
 function BusinessDetailsForm() {
   const params = useParams();
@@ -99,6 +107,7 @@ function BusinessDetailsForm() {
   const role = String(session?.user?.role || "").toLowerCase();
 
   const [showMapPicker, setShowMapPicker] = useState(false);
+  const [shopIdentityProof, setShopIdentityProof] = useState(null);
 
   const [form, setForm] = useState({
     businessName: "",
@@ -262,6 +271,29 @@ const [locationSelected, setLocationSelected] = useState(false);
     }
   }, [addressSearch]);
 
+
+  const handleProofChange = useCallback((event) => {
+  const file = event.target.files?.[0];
+
+  if (!file) return;
+
+  if (!ALLOWED_PROOF_TYPES.includes(file.type)) {
+    setError("Please upload a PDF, JPG, PNG, or WebP document.");
+    event.target.value = "";
+    return;
+  }
+
+  if (file.size > MAX_PROOF_SIZE) {
+    setError("Shop identity proof must not exceed 5 MB.");
+    event.target.value = "";
+    return;
+  }
+
+  setShopIdentityProof(file);
+  setError("");
+  event.target.value = "";
+}, []);
+
   const useMyLocation = useCallback(() => {
     setError("");
 
@@ -406,6 +438,21 @@ const handleMapChange = useCallback((location) => {
         }
       }
 
+      if (!shopIdentityProof) {
+  setError("Please upload your shop identity proof.");
+  return;
+}
+
+if (!ALLOWED_PROOF_TYPES.includes(shopIdentityProof.type)) {
+  setError("Invalid shop identity proof format.");
+  return;
+}
+
+if (shopIdentityProof.size > MAX_PROOF_SIZE) {
+  setError("Shop identity proof must not exceed 5 MB.");
+  return;
+}
+
       setSaving(true);
 
       try {
@@ -425,11 +472,13 @@ const handleMapChange = useCallback((location) => {
 
         const formData = new FormData();
 
-        formData.append("details", JSON.stringify(details));
+      formData.append("details", JSON.stringify(details));
 
-        if (businessImage) {
-          formData.append("businessImage", businessImage);
-        }
+if (businessImage) {
+  formData.append("businessImage", businessImage);
+}
+
+formData.append("shopIdentityProof", shopIdentityProof);
 
         const response = await fetch("/api/owner/business", {
           method: "POST",
@@ -454,7 +503,7 @@ const handleMapChange = useCallback((location) => {
         }
 
         sessionStorage.setItem(
-          "zeric-business-details",
+          "zeriy-business-details",
           JSON.stringify({
             ...details,
             businessId: result.businessId,
@@ -771,6 +820,74 @@ const handleMapChange = useCallback((location) => {
                 </label>
               )}
             </section>
+
+ 
+<section>
+  <h2 className="mb-2 text-base font-bold text-slate-900">
+    Business Identity Proof
+    <span className="ml-2 text-sm font-normal text-red-500">
+      *
+    </span>
+  </h2>
+
+  <p className="mb-4 text-sm text-slate-500">
+    Upload a shop registration certificate, trade licence,
+    or other valid business identity document.
+  </p>
+
+  <div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-5">
+    {shopIdentityProof ? (
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
+            <BriefcaseBusiness size={21} />
+          </div>
+
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-slate-800">
+              {shopIdentityProof.name}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              {(shopIdentityProof.size / (1024 * 1024)).toFixed(2)} MB
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShopIdentityProof(null)}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50"
+        >
+          <X size={16} />
+          Remove
+        </button>
+      </div>
+    ) : (
+      <label className="flex cursor-pointer flex-col items-center text-center">
+        <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600">
+          <Plus size={26} />
+        </div>
+
+        <p className="text-sm font-semibold text-slate-800">
+          Upload shop identity proof
+        </p>
+
+        <p className="mt-2 text-xs text-slate-500">
+          PDF, JPG, PNG or WebP · Maximum 5 MB
+        </p>
+
+        <input
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+          className="hidden"
+          onChange={handleProofChange}
+        />
+      </label>
+    )}
+  </div>
+</section>
+
 
             <section>
               <h2 className="mb-4 flex items-center gap-2 text-base font-bold text-slate-900">

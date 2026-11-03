@@ -6,7 +6,7 @@ import TeamDashboard from "@/components/dashboard/TeamDashboard";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 export const metadata = {
-  title: "Staff Dashboard | Zeric",
+  title: "Staff Dashboard | Zeriy",
   description: "Manage customer bookings and your profile.",
 };
 

@@ -129,12 +129,12 @@ export async function POST(request) {
 
     try {
       await transporter.sendMail({
-        from: `"Zeric" <${process.env.EMAIL_USER}>`,
+        from: `"Zeriy" <${process.env.EMAIL_USER}>`,
         to: account.email,
-        subject: "Your Zeric Password Reset OTP",
+        subject: "Your Zeriy Password Reset OTP",
         text: `Hello ${displayName},
 
-Your Zeric ${accountLabel} password reset OTP is: ${otp}
+Your Zeriy ${accountLabel} password reset OTP is: ${otp}
 
 This OTP expires in 15 minutes. Do not share it with anyone.
 
@@ -143,7 +143,7 @@ If you did not request this OTP, please ignore this email.`,
           <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:30px;color:#334155;">
             <h2 style="color:#0f172a;">Hello ${safeName} 👋</h2>
 
-            <p>We received a request to reset your Zeric ${accountLabel} account password.</p>
+            <p>We received a request to reset your Zeriy ${accountLabel} account password.</p>
 
             <p>Use this verification code to continue:</p>
 
@@ -159,7 +159,7 @@ If you did not request this OTP, please ignore this email.`,
             <hr style="border:none;border-top:1px solid #e2e8f0;margin:30px 0;" />
 
             <p style="font-size:12px;color:#94a3b8;">
-              Zeric — Made Simpler &amp; Much Faster
+              Zeriy — Made Simpler &amp; Much Faster
             </p>
           </div>
         `,

@@ -1179,6 +1179,46 @@ function TeamProfile({
                 </div>
               </section>
 
+                <section className="rounded-2xl border border-slate-200 p-4">
+                <h3 className="text-sm font-semibold text-slate-800">
+                  Profile photo
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  JPG, PNG or WebP. Maximum file size: 5 MB.
+                </p>
+
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    {uploading ? (
+                      <LoaderCircle size={17} className="animate-spin" />
+                    ) : (
+                      <Upload size={17} />
+                    )}
+                    {uploading ? "Uploading..." : "Choose image"}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      disabled={uploading}
+                      onChange={(event) => {
+                        uploadProfileImage(event.target.files?.[0]);
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+
+                  {form.profileImage && (
+                    <button
+                      type="button"
+                      onClick={() => update("profileImage", "")}
+                      className="text-sm font-medium text-rose-600 hover:text-rose-700"
+                    >
+                      Remove photo
+                    </button>
+                  )}
+                </div>
+              </section>
+
               <section className="rounded-2xl border border-slate-200 p-4 sm:p-5">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -1415,45 +1455,7 @@ function TeamProfile({
                 </div>
               </section>
 
-              <section className="rounded-2xl border border-slate-200 p-4">
-                <h3 className="text-sm font-semibold text-slate-800">
-                  Profile photo
-                </h3>
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  JPG, PNG or WebP. Maximum file size: 5 MB.
-                </p>
-
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                    {uploading ? (
-                      <LoaderCircle size={17} className="animate-spin" />
-                    ) : (
-                      <Upload size={17} />
-                    )}
-                    {uploading ? "Uploading..." : "Choose image"}
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      className="hidden"
-                      disabled={uploading}
-                      onChange={(event) => {
-                        uploadProfileImage(event.target.files?.[0]);
-                        event.target.value = "";
-                      }}
-                    />
-                  </label>
-
-                  {form.profileImage && (
-                    <button
-                      type="button"
-                      onClick={() => update("profileImage", "")}
-                      className="text-sm font-medium text-rose-600 hover:text-rose-700"
-                    >
-                      Remove photo
-                    </button>
-                  )}
-                </div>
-              </section>
+            
 
               <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
                 <button
@@ -2610,7 +2612,7 @@ async function handleBookPatient(e) {
           >
             <Image
               src="/logo.png"
-              alt="Zeric"
+              alt="Zeriy"
               width={42}
               height={42}
               priority
@@ -2619,7 +2621,7 @@ async function handleBookPatient(e) {
 
             <div className="min-w-0">
               <p className="text-lg font-extrabold tracking-tight text-slate-900">
-                Zeric
+                Zeriy
               </p>
               <p className="text-[11px] font-medium text-slate-500">
                 {roleLabel} workspace
@@ -4293,7 +4295,7 @@ async function handleBookPatient(e) {
           )}
 
           <footer className="flex flex-col gap-2 border-t border-slate-200/80 py-4 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
-            <p>© {new Date().getFullYear()} Zeric. All rights reserved.</p>
+            <p>© {new Date().getFullYear()} Zeriy. All rights reserved.</p>
             <p>Made Simpler & Much Faster</p>
           </footer>
         </main>

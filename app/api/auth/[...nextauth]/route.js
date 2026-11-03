@@ -1,4 +1,4 @@
-
+ 
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
@@ -19,13 +19,6 @@ function normalizeEmail(value) {
 
 function normalizeRole(value) {
   return String(value || "").trim().toLowerCase();
-}
-
-function getDashboard(role) {
-  if (role === "staff") return "/staff/dashboard";
-  if (role === "doctor") return "/doctor/dashboard";
-  if (role === "owner") return "/owner/dashboard";
-  return "/signin";
 }
 
 function getTeamConditions(identifier) {
@@ -60,9 +53,7 @@ function getTeamConditions(identifier) {
 function isActiveAccount(account) {
   return (
     account?.isActive === true ||
-    ["active"].includes(
-      String(account?.status || "").trim().toLowerCase()
-    )
+    String(account?.status || "").trim().toLowerCase() === "active"
   );
 }
 
@@ -78,8 +69,7 @@ function toTeamUser(account) {
   return {
     id: account._id.toString(),
     name: account.fullName || account.name || "",
-    email:
-      normalizeEmail(account.email || account.emailAddress) || null,
+    email: normalizeEmail(account.email || account.emailAddress) || null,
     phone: account.phone || account.mobile || "",
     role,
     isConfigured: account.isConfigured ?? true,
@@ -129,23 +119,12 @@ export const authOptions = {
     CredentialsProvider({
       id: "credentials",
       name: "Email, ID and Password",
+
       credentials: {
-        identifier: {
-          label: "Team ID, Email or Mobile",
-          type: "text",
-        },
-        password: {
-          label: "Password",
-          type: "password",
-        },
-        role: {
-          label: "Role",
-          type: "text",
-        },
-        verificationToken: {
-          label: "OTP Verification Token",
-          type: "text",
-        },
+        identifier: { label: "Email or Mobile", type: "text" },
+        password: { label: "Password", type: "password" },
+        role: { label: "Role", type: "text" },
+        verificationToken: { label: "Verification Token", type: "text" },
       },
 
       async authorize(credentials) {
@@ -158,7 +137,7 @@ export const authOptions = {
           const db = client.db(process.env.MONGODB);
           const now = new Date();
 
-          // Single-use owner login after OTP verification.
+          // OWNER LOGIN AFTER OTP VERIFICATION
           if (credentials?.verificationToken) {
             if (role !== "owner") return null;
 
@@ -202,15 +181,13 @@ export const authOptions = {
 
           const password = credentials?.password;
 
-          if (
-            !identifier ||
-            typeof password !== "string" ||
-            !password
-          ) {
+          if (!identifier || typeof password !== "string" || !password) {
             return null;
           }
 
-          // Owner login.
+          // =====================================
+          // OWNER LOGIN
+          // =====================================
           if (role === "owner") {
             const conditions = identifier.includes("@")
               ? [{ email: normalizeEmail(identifier) }]
@@ -220,19 +197,10 @@ export const authOptions = {
                 ];
 
             const owner = await db.collection("owners").findOne({
-              $and: [
-                { $or: conditions },
-                { isVerified: true },
-              ],
+              $or: conditions,
             });
 
-            if (
-              !owner ||
-              typeof owner.password !== "string" ||
-              !owner.password.startsWith("$2")
-            ) {
-              return null;
-            }
+            if (!owner || !owner.password) return null;
 
             const validPassword = await bcrypt.compare(
               password,
@@ -241,21 +209,22 @@ export const authOptions = {
 
             if (!validPassword) return null;
 
+            // Only verified owners can create a session.
+            if (owner.isVerified !== true) return null;
+
             return toOwnerUser(owner);
           }
 
-          // Staff and doctor login.
+          // =====================================
+          // STAFF AND DOCTOR LOGIN
+          // =====================================
           const conditions = getTeamConditions(identifier);
 
           if (!conditions.length) return null;
 
           const candidates = await db
             .collection("team")
-            .find({
-              $and: [
-                { $or: conditions },
-              ],
-            })
+            .find({ $or: conditions })
             .limit(20)
             .toArray();
 
@@ -268,27 +237,31 @@ export const authOptions = {
 
           if (!account) return null;
 
-        const storedPassword =
-  account.passwordHash || account.password;
+          const storedPassword =
+            account.passwordHash || account.password;
 
-if (typeof storedPassword !== "string" || !storedPassword) {
-  console.error("Team login failed: password missing.");
-  return null;
-}
+          if (
+            typeof storedPassword !== "string" ||
+            !storedPassword
+          ) {
+            return null;
+          }
 
-let validPassword = false;
+          let validPassword = false;
 
-if (/^\$2[aby]\$/.test(storedPassword)) {
-  // Existing bcrypt-hashed password
-  validPassword = await bcrypt.compare(password, storedPassword);
-} else {
-  // Legacy plain-text password
-  validPassword = password === storedPassword;
-}
+          if (/^\$2[aby]\$\d{2}\$/.test(storedPassword)) {
+            validPassword = await bcrypt.compare(
+              password,
+              storedPassword
+            );
+          } else {
+            validPassword = password === storedPassword;
+          }
 
-if (!validPassword) return null;
+          if (!validPassword) return null;
 
-return toTeamUser(account);
+          return toTeamUser(account);
+
         } catch (error) {
           console.error("Credentials authorization error:", error);
           return null;
@@ -302,11 +275,9 @@ return toTeamUser(account);
   },
 
   callbacks: {
+    // GOOGLE LOGIN
     async signIn({ user, account }) {
-      if (account?.provider !== "google") {
-        return true;
-      }
-
+      if (account?.provider !== "google") return true;
       if (!user.email) return false;
 
       try {
@@ -316,12 +287,11 @@ return toTeamUser(account);
         const cookieStore = await cookies();
 
         const requestedRole = normalizeRole(
-          cookieStore.get("zeric_login_role")?.value || "owner"
+          cookieStore.get("zeriy_login_role")?.value || "owner"
         );
 
         const now = new Date();
 
-        // Google login for existing staff or doctors.
         if (TEAM_ROLES.includes(requestedRole)) {
           const teamMember = await findTeamMemberByEmail(
             db,
@@ -330,12 +300,11 @@ return toTeamUser(account);
           );
 
           if (!teamMember) {
-            const error =
+            return `/signin?error=${
               requestedRole === "doctor"
                 ? "DoctorAccessDenied"
-                : "StaffAccessDenied";
-
-            return `/signin?error=${error}`;
+                : "StaffAccessDenied"
+            }`;
           }
 
           const teamUser = toTeamUser(teamMember);
@@ -343,11 +312,9 @@ return toTeamUser(account);
           if (!teamUser) return false;
 
           Object.assign(user, teamUser);
-
           return true;
         }
 
-        // Google login and registration for owners.
         if (requestedRole !== "owner") return false;
 
         const owners = db.collection("owners");
@@ -365,7 +332,7 @@ return toTeamUser(account);
           });
 
           if (pendingOwner) {
-            return "/signin?error=EmailNotVerified";
+            return `/verify-otp?email=${encodeURIComponent(email)}`;
           }
 
           const result = await owners.insertOne({
@@ -414,14 +381,15 @@ return toTeamUser(account);
         if (!ownerUser) return false;
 
         Object.assign(user, ownerUser);
-
         return true;
+
       } catch (error) {
         console.error("Google sign-in error:", error);
         return false;
       }
     },
 
+    // JWT
     async jwt({ token, user, trigger, session }) {
       if (user) {
         token.id = user.id || user._id?.toString() || "";
@@ -445,6 +413,7 @@ return toTeamUser(account);
       return token;
     },
 
+    // SESSION
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id || "";
@@ -452,17 +421,15 @@ return toTeamUser(account);
         session.user.email = token.email || "";
         session.user.role = token.role || "";
         session.user.phone = token.phone || "";
-        session.user.isConfigured =
-          token.isConfigured ?? false;
+        session.user.isConfigured = token.isConfigured ?? false;
       }
 
       return session;
     },
 
+    // REDIRECT
     async redirect({ url, baseUrl }) {
-      if (url.startsWith("/")) {
-        return `${baseUrl}${url}`;
-      }
+      if (url.startsWith("/")) return `${baseUrl}${url}`;
 
       try {
         if (new URL(url).origin === new URL(baseUrl).origin) {

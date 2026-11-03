@@ -19,6 +19,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { toast } from "react-toastify";
+import { signIn} from "next-auth/react";
 
 function VerifyOtpContent() {
   const router = useRouter();
@@ -111,110 +112,129 @@ function VerifyOtpContent() {
     inputRefs.current[focusIndex]?.focus();
   };
 
-  const handleVerify = async (event) => {
-    event.preventDefault();
 
-    if (!email) {
-      toast.error("Email address is missing. Please register again.");
+const handleVerify = async (event) => {
+  event.preventDefault();
+
+  if (!email) {
+    toast.error("Email address is missing. Please register again.");
+    return;
+  }
+
+  const code = otp.join("");
+
+  if (!/^\d{6}$/.test(code)) {
+    toast.error("Please enter the complete 6-digit OTP.");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    // Step 1: Verify email OTP
+    const response = await fetch("/api/owner/verify-otp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        otp: code,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || "OTP verification failed.");
+    }
+
+    // Step 2: Get password saved during registration
+    const password = sessionStorage.getItem("password");
+
+    if (!password) {
+      toast.error("Email verified. Please log in to continue.");
+      router.replace("/owner/login");
       return;
     }
 
-    const code = otp.join("");
+    // Step 3: Direct login using NextAuth
+    const result = await signIn("credentials", {
+      identifier: email,
+      password,
+      role: "owner",
+      redirect: false,
+    });
 
-    if (code.length !== 6) {
-      toast.error("Please enter the complete 6-digit OTP.");
+    // Remove stored password
+    sessionStorage.removeItem("password");
+
+    if (!result || result.error) {
+      toast.error("Email verified. Please log in manually.");
+      router.replace("/owner/login");
       return;
     }
 
-    setLoading(true);
+    // Step 4: Directly redirect after login
+    toast.success("Account verified successfully!");
 
-    try {
-     const response = await fetch("/api/owner/verify-otp", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    email,
-    otp,
-  }),
-});
+    router.replace("/owner/select-category");
 
-const data = await response.json();
-
-if (!response.ok || !data.success) {
-  throw new Error(data.error || "OTP verification failed.");
-}
-
-const result = await signIn("credentials", {
-  identifier: email,
-  password,
-  role: "owner",
-  redirect: false,
-  callbackUrl: "/owner/select-categoty",
-});
-
-if (result?.error) {
-  toast.error("Email verified. Please log in to continue.");
-  return;
-}
+  } catch (error) {
+    toast.error(error.message || "Unable to verify OTP.");
+  } finally {
+    setLoading(false);
+  }
+};
 
 
 
-    
-      if (!response.ok) {
-        throw new Error(data.message || data.error || "OTP verification failed.");
-      }
+const handleResend = useCallback(async () => {
+  if (!email) {
+    toast.error("Email address is missing. Please register again.");
+    return;
+  }
 
-      toast.success(data.message || "Email verified successfully!");
+  if (resendSeconds > 0 || resending || loading) {
+    return;
+  }
 
-      router.replace("/owner/select-category");
-    } catch (error) {
-      toast.error(error.message || "Unable to verify OTP.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  setResending(true);
 
-  const handleResend = useCallback(async () => {
-    if (!email) {
-      toast.error("Email address is missing. Please register again.");
-      return;
+  try {
+    const response = await fetch("/api/owner/resend-register-otp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(
+        data.error || data.message || "Could not resend OTP."
+      );
     }
 
-    if (resendSeconds > 0 || resending || loading) {
-      return;
-    }
+    // Clear all six OTP inputs.
+    setOtp(Array(6).fill(""));
 
-    setResending(true);
+    // Start 30-second resend cooldown.
+    setResendDeadline(Date.now() + 30_000);
 
-    try {
-      const response = await fetch("/api/owner/resend-register-otp", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email }),
-      });
+    toast.success(data.message || "A new OTP has been sent.");
 
-      const data = await response.json();
+    // Focus first OTP input.
+    inputRefs.current[0]?.focus();
 
-      if (!response.ok) {
-        throw new Error(data.message || data.error || "Could not resend OTP.");
-      }
-
-      setOtp(Array(6).fill(""));
-      setResendDeadline(Date.now() + 30_000);
-
-      toast.success(data.message || "A new OTP has been sent.");
-
-      inputRefs.current[0]?.focus();
-    } catch (error) {
-      toast.error(error.message || "Unable to resend OTP.");
-    } finally {
-      setResending(false);
-    }
-  }, [email, resendSeconds, resending, loading]);
+  } catch (error) {
+    toast.error(error.message || "Unable to resend OTP.");
+  } finally {
+    setResending(false);
+  }
+}, [email, resendSeconds, resending, loading]);
 
   const formattedTime = `00:${String(resendSeconds).padStart(2, "0")}`;
 
@@ -236,14 +256,14 @@ if (result?.error) {
   
 
         <div className="mb-6 flex justify-center">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
+          <div className="flex h-13 w-13 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
        <Image
             src="/logo.png"
-            alt="Zeric"
-            width={140}
-            height={48}
+            alt="Zeriy"
+            width={40}
+            height={40}
             priority
-            className="h-12 w-auto object-contain"
+            className="h-12 w-12 object-contain rounded-2xl"
           />
           </div>
         </div>
