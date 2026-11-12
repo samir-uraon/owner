@@ -79,7 +79,10 @@ function normalizeSchedule(schedule = {}) {
             close: slot.close || slot.end || "",
             capacity: Number(slot.capacity ?? 0),
             checkupStartTime:
-              slot.checkupStartTime || slot.open || slot.start || "",
+              slot.checkupStartTime ||
+              slot.open ||
+              slot.start ||
+              "",
             active: slot.active ?? true,
           }))
         : [];
@@ -87,9 +90,8 @@ function normalizeSchedule(schedule = {}) {
       return [
         day,
         {
-          // Preserve both true and false.
-          // Missing day status defaults to false.
-          active: entry.active ?? false,
+          // A day is active if it contains at least one slot.
+          active: slots.length > 0,
           slots,
         },
       ];

@@ -148,9 +148,15 @@ export default function OwnerDashboard() {
       .join("") || "BO";
 
   useEffect(() => {
-    if (status === "unauthenticated") {
-      router.replace("/signin");
-    }
+if (status === "unauthenticated") {
+  router.replace("/signin");
+  return;
+}
+
+if (status === "authenticated" && session?.user?.role !== "owner") {
+  router.replace("/signin");
+  return;
+}
   }, [status, router]);
 
 

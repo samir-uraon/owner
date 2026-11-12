@@ -31,6 +31,10 @@ import {
   Play,
   Ticket,
   UserPlus,
+  User,
+  VenusAndMars,
+  Clock,
+  Bell,
 } from "lucide-react";
 import Image from "next/image";
 import { toast } from "react-toastify";
@@ -132,15 +136,12 @@ function sortTodayPatients(patients) {
     const aStatus = getCustomerStatus(a);
     const bStatus = getCustomerStatus(b);
 
-    // Completed patients always go to the bottom.
     if (aStatus === "completed" && bStatus !== "completed") return 1;
     if (bStatus === "completed" && aStatus !== "completed") return -1;
 
-    // Emergency, elderly, then normal patients.
     const priorityDifference = priorityOrder(a) - priorityOrder(b);
     if (priorityDifference !== 0) return priorityDifference;
 
-    // Keep the existing relative order for patients with equal priority.
     return 0;
   });
 }
@@ -187,6 +188,10 @@ function getCustomerGender(customer) {
   return customer?.gender || "";
 }
 
+function getCustomerAge(customer) {
+  return customer?.age || "";
+}
+
 function getCustomerToken(customer) {
   return (
     customer?.tokenNumber ||
@@ -198,14 +203,30 @@ function getCustomerToken(customer) {
 }
 
 function getCustomerType(customer) {
-  return (
-    customer?.priority ||
-    "—"
-  );
+  return customer?.priority || "—";
 }
 
 function getCustomerStatus(customer) {
   return getStatus(customer?.status || customer?.bookingStatus);
+}
+
+function getArriveTime(customer) {
+  if (!customer?.createdAt || !customer?.arrivalTime) return "";
+
+  const createdAt = new Date(customer.createdAt);
+
+  if (Number.isNaN(createdAt.getTime())) return "";
+
+  const arrivalDate = new Date(
+    createdAt.getTime() + Number(customer.arrivalTime) * 60 * 1000
+  );
+
+  return arrivalDate.toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata",
+  });
 }
 
 function getPriorityRank(customer) {
@@ -540,6 +561,8 @@ function TeamProfile({
   );
   const [savingHolidays, setSavingHolidays] = useState(false);
 
+  
+
   useEffect(() => {
     setForm({
       name: profile?.name || "",
@@ -570,31 +593,88 @@ function TeamProfile({
 
   async function saveHolidayDates(nextDates) {
     setSavingHolidays(true);
+
     try {
       const response = await fetch(API.profile, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({  holidayDates: nextDates }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          holidayDates: nextDates,
+        }),
       });
+
       const result = await response.json().catch(() => ({}));
+
       if (!response.ok) {
-        throw new Error(result?.message || "Unable to save holiday dates.");
+        throw new Error(
+          result?.message || "Unable to save holiday dates."
+        );
       }
 
       const savedProfile = result?.profile;
       const today = getLocalDate();
+
       const savedDates = Array.isArray(savedProfile?.holidays)
         ? savedProfile.holidays.filter((date) => date >= today).sort()
-        : nextDates;
+        : [...nextDates].sort();
 
       setHolidayDates(savedDates);
+
       if (savedProfile) {
-        onProfileChange?.({ ...profile, ...savedProfile });
-        onProfileSaved?.({ ...profile, ...savedProfile });
+        const updatedProfile = {
+          ...profile,
+          ...savedProfile,
+        };
+
+        onProfileChange?.(updatedProfile);
+        onProfileSaved?.(updatedProfile);
       }
+
+      if (savedDates.includes(today)) {
+        const slots = todaySlots || [];
+
+        if (slots.length === 0) {
+          toast.error(
+            "Holiday saved, but no today's schedule slots were found."
+          );
+          return;
+        }
+
+        const results = await Promise.all(
+          slots.map(async (slot) => {
+            try {
+              return await closeTodaySessionAndCancelBookings(slot);
+            } catch {
+              return false;
+            }
+          })
+        );
+
+        const failedCount = results.filter(
+          (success) => success !== true
+        ).length;
+
+        if (failedCount > 0) {
+          toast.error(
+            `Holiday saved. ${failedCount} session(s) could not be cancelled.`
+          );
+        } else {
+          toast.success(
+            "Holiday saved and all today's sessions cancelled."
+          );
+        }
+
+        return;
+      }
+
       toast.success("Holiday dates saved.");
     } catch (error) {
-      toast.error(error.message || "Unable to save holiday dates.");
+      toast.error(
+        error.message || "Unable to save holiday dates."
+      );
     } finally {
       setSavingHolidays(false);
     }
@@ -602,22 +682,27 @@ function TeamProfile({
 
   function addHolidayDate() {
     const today = getLocalDate();
+
     if (!holidayDate || holidayDate < today) {
       toast.error("Choose today or a future date.");
       return;
     }
+
     if (holidayDates.includes(holidayDate)) {
       toast.info("This date is already selected.");
       return;
     }
+
     const nextDates = [...holidayDates, holidayDate].sort();
-    setHolidayDates(nextDates);
+
     saveHolidayDates(nextDates);
   }
 
   function removeHolidayDate(dateToRemove) {
-    const nextDates = holidayDates.filter((date) => date !== dateToRemove);
-    setHolidayDates(nextDates);
+    const nextDates = holidayDates.filter(
+      (date) => date !== dateToRemove
+    );
+
     saveHolidayDates(nextDates);
   }
 
@@ -666,44 +751,43 @@ function TeamProfile({
   }
 
   async function removeDaySlot(day, index) {
-  const updatedSchedule = {
-    ...weeklySchedule,
-    [day]: {
-      ...weeklySchedule[day],
-      slots: weeklySchedule[day].slots.filter(
-        (_, slotIndex) => slotIndex !== index
-      ),
-    },
-  };
-
-  // Update the page
-  setWeeklySchedule(updatedSchedule);
-
-  setError("");
-  setSuccess("");
-
-  try {
-    const response = await fetch("/api/team/schedule", {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
+    const updatedSchedule = {
+      ...weeklySchedule,
+      [day]: {
+        ...weeklySchedule[day],
+        slots: weeklySchedule[day].slots.filter(
+          (_, slotIndex) => slotIndex !== index
+        ),
       },
-      body: JSON.stringify({
-        weeklySchedule: updatedSchedule,
-      }),
-    });
+    };
 
-    const data = await response.json();
+    setWeeklySchedule(updatedSchedule);
 
-    if (!response.ok) {
-      throw new Error(data.error || "Failed to save schedule");
+    setError("");
+    setSuccess("");
+
+    try {
+      const response = await fetch("/api/team/schedule", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          weeklySchedule: updatedSchedule,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to save schedule");
+      }
+
+      setSuccess("Slot removed successfully.");
+    } catch (error) {
+      setError(error.message || "Failed to save schedule.");
     }
-
-    setSuccess("Slot removed successfully.");
-  } catch (error) {
-    setError(error.message || "Failed to save schedule.");
   }
-}
 
   function updateStaffService(index, field, value) {
     setForm((previous) => ({
@@ -1179,7 +1263,7 @@ function TeamProfile({
                 </div>
               </section>
 
-                <section className="rounded-2xl border border-slate-200 p-4">
+              <section className="rounded-2xl border border-slate-200 p-4">
                 <h3 className="text-sm font-semibold text-slate-800">
                   Profile photo
                 </h3>
@@ -1379,19 +1463,17 @@ function TeamProfile({
                                 </div>
 
                                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                                  <TimeSelect
-                                    label="Opening time"
-                                    value={slot.open}
-                                    disabled={saving}
-                                    onChange={(value) =>
-                                      updateDaySlot(
-                                        day,
-                                        index,
-                                        "open",
-                                        value
-                                      )
-                                    }
-                                  />
+                                <TimeSelect
+  label="Opening time"
+  value={slot.open}
+  disabled={saving}
+  onChange={(value) => {
+    updateDaySlot(day, index, "open", value);
+
+    // Automatically set checkup start time to opening time
+    updateDaySlot(day, index, "checkupStartTime", value);
+  }}
+/>
 
                                   <TimeSelect
                                     label="Closing time"
@@ -1454,8 +1536,6 @@ function TeamProfile({
                   })}
                 </div>
               </section>
-
-            
 
               <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
                 <button
@@ -1761,7 +1841,6 @@ export default function TeamDashboard({ role = "staff" }) {
   const [todaySessionStates, setTodaySessionStates] = useState({});
   const [updatingSessionId, setUpdatingSessionId] = useState("");
 
-  // Patient manual booking modal state
   const [bookingModalOpen, setBookingModalOpen] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
   const [bookingForm, setBookingForm] = useState({
@@ -1772,7 +1851,45 @@ export default function TeamDashboard({ role = "staff" }) {
     date: getLocalDate(),
     slot: "",
   });
+const [notifyingCustomerId, setNotifyingCustomerId] = useState(null);
 
+async function sendPatientNotification(customer) {
+  const customerId = customer?._id;
+
+  if (!customerId) return;
+
+  try {
+    setNotifyingCustomerId(customerId);
+
+    const response = await fetch("/api/notifications/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        userId: customer.userId,
+        title: "Your Checkup Is Ready!",
+        message: "Please proceed to the doctor's room. Your checkup is ready.",
+        url: `${process.env.NEXTAUTH_URL2}/my-booking`,
+      }),
+    });
+
+    const data = await response.json();
+    console.log(data);
+    
+
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to send notification");
+    }
+
+    toast.success("Patient notified successfully!");
+  } catch (error) {
+    console.error("Notification error:", error);
+    toast.error(error.message || "Unable to notify patient");
+  } finally {
+    setNotifyingCustomerId(null);
+  }
+}
   const todayDate = getLocalDate();
   const todayDayName = getDayName(todayDate);
 
@@ -1822,16 +1939,13 @@ export default function TeamDashboard({ role = "staff" }) {
   const sortSessionPatients = (patients) => [...patients].sort((a, b) => {
     const statusA = getCustomerStatus(a);
     const statusB = getCustomerStatus(b);
-    
-    // Sort active (serving/waiting) patients before completed or cancelled ones
+
     const statusDifference = getStatusRank(statusA) - getStatusRank(statusB);
     if (statusDifference) return statusDifference;
 
-    // Within the same status group, sort by Priority: Emergency -> Elderly -> Normal
     const priorityDifference = getPriorityRank(a) - getPriorityRank(b);
     if (priorityDifference) return priorityDifference;
 
-    // Finally sort by token sequence
     return Number(a?.sequence ?? a?.tokenSequence ?? Number.MAX_SAFE_INTEGER) -
       Number(b?.sequence ?? b?.tokenSequence ?? Number.MAX_SAFE_INTEGER);
   });
@@ -1849,32 +1963,131 @@ export default function TeamDashboard({ role = "staff" }) {
     todaySessionStates[String(slot.value)]?.status || "not-started";
 
   async function updateTodaySession(slot, action) {
-    const sessionId = String(slot.value || "");
-    if (!sessionId) return toast.error("Session identifier is missing.");
+    const sessionId = String(slot?.value || "").trim();
+    const sessionLabel = String(slot?.label || "").trim();
+
+    const slotOpen = String(slot?.open || "").trim();
+    const slotClose = String(slot?.close || "").trim();
+
+    if (!sessionId) {
+      return toast.error("Session identifier is missing.");
+    }
+
+    if (!slotOpen || !slotClose) {
+      console.error("Invalid session slot:", slot);
+      return toast.error("Session slot times are missing.");
+    }
+
+    if (!["start", "close", "cancel"].includes(action)) {
+      return toast.error("Invalid session action.");
+    }
+
     const current = getSessionState(slot);
-    if (action === "start" && current === "closed") return toast.error("This session is already closed.");
-    if (action === "close" && current !== "active") return toast.error("Start the session before closing it.");
-    if (action === "close" && !window.confirm(`Close ${slot.label}? New checkups will be blocked for this session.`)) return;
+
+    if (action === "start" && current === "active") {
+      return toast.error("This session is already active.");
+    }
+
+    if (action === "start" && current === "closed") {
+      return toast.error("This session is already closed or cancelled.");
+    }
+
+    if (action === "close" && current !== "active") {
+      return toast.error("Start the session before closing it.");
+    }
+
+    if (action === "cancel" && current === "closed") {
+      return toast.error("This session is already cancelled.");
+    }
+
+    const actionName =
+      action === "start"
+        ? "start"
+        : action === "close"
+          ? "close"
+          : "cancel";
+
+    const confirmMessage = {
+      start: `Start ${sessionLabel}?`,
+      close: `Close ${sessionLabel}? New checkups will be blocked for this session.`,
+      cancel: `Cancel ${sessionLabel}? Waiting bookings will be moved to pending for doctor action.`,
+    };
+
+    if (!window.confirm(confirmMessage[actionName])) return;
+
+    if (updatingSessionId) return;
 
     setUpdatingSessionId(sessionId);
+
     try {
       const response = await fetch(API.sessions, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
         cache: "no-store",
         body: JSON.stringify({
-          action: action === "start" ? "start-session" : "close-session",
-          role, date: todayDate, sessionId, sessionLabel: slot.label,
+          action:
+            action === "start"
+              ? "start-session"
+              : action === "close"
+                ? "close-session"
+                : "cancel-session",
+          role: "doctor",
+          date: todayDate,
+          sessionId,
+          sessionLabel,
+          slotOpen,
+          slotClose,
         }),
       });
+
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result?.error || result?.message || "Unable to update session.");
-      const status = result?.session?.status || result?.status || (action === "start" ? "active" : "closed");
+
+      if (!response.ok || result?.success === false) {
+        throw new Error(
+          result?.error ||
+          result?.message ||
+          "Unable to update session."
+        );
+      }
+
+      const updatedSession = result?.session || {};
+
+      const status =
+        updatedSession.status ||
+        (action === "start" ? "active" : "closed");
+
       setTodaySessionStates((previous) => ({
-        ...previous, [sessionId]: { ...previous[sessionId], ...(result?.session || {}), status },
+        ...previous,
+        [sessionId]: {
+          ...previous[sessionId],
+          ...updatedSession,
+          sessionId,
+          sessionLabel,
+          slotOpen,
+          slotClose,
+          status,
+          cancel: action !== "start",
+        },
       }));
-      toast.success(action === "start" ? "Today's checkup session started." : "Today's session closed.");
+
+      await Promise.all([
+        loadTodayCustomers(),
+        loadCustomers(),
+      ]);
+
+      toast.success(
+        action === "start"
+          ? "Today's session started successfully."
+          : action === "close"
+            ? "Today's session closed successfully."
+            : `Session cancelled. ${result.bookingsUpdated || 0} bookings moved to pending.`
+      );
+
     } catch (error) {
+      console.error("Update today session:", error);
       toast.error(error.message || "Unable to update session.");
     } finally {
       setUpdatingSessionId("");
@@ -1883,14 +2096,28 @@ export default function TeamDashboard({ role = "staff" }) {
 
   async function closeTodaySessionAndCancelBookings(slot) {
     const sessionId = String(slot.value || "");
-    if (!sessionId) return toast.error("Session identifier is missing.");
+    const slotOpen = String(slot.open || slot.slotOpen || "");
+    const slotClose = String(slot.close || slot.slotClose || "");
+
+    if (!sessionId) {
+      toast.error("Session identifier is missing.");
+      return false;
+    }
+
+    if (!slotOpen || !slotClose) {
+      toast.error("Session slot times are missing.");
+      return false;
+    }
 
     setUpdatingSessionId(sessionId);
+
     try {
-      // 1. Close session via API
-      const sessionResponse = await fetch(API.sessions, {
+      const response = await fetch(API.sessions, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
         cache: "no-store",
         body: JSON.stringify({
           action: "close-session",
@@ -1898,79 +2125,128 @@ export default function TeamDashboard({ role = "staff" }) {
           date: todayDate,
           sessionId,
           sessionLabel: slot.label,
+          slotOpen,
+          slotClose,
         }),
       });
 
-      const sessionResult = await sessionResponse.json().catch(() => ({}));
-      if (!sessionResponse.ok) {
-        throw new Error(sessionResult?.error || sessionResult?.message || "Unable to close session.");
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          result?.error || "Unable to cancel session."
+        );
       }
-
-      // 2. Cancel waiting bookings for this session
-      const patients = getTodaySessionPatients(slot);
-      const waitingPatients = patients.filter(
-        (patient) => getCustomerStatus(patient) === "waiting"
-      );
-
-      await Promise.all(
-        waitingPatients.map((patient) => {
-          const id = patient?._id || patient?.id || patient?.bookingId;
-          if (!id) return Promise.resolve();
-          return fetch(API.customers, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            cache: "no-store",
-            body: JSON.stringify({
-              bookingId: String(id),
-              status: "cancelled",
-              role,
-              date: todayDate,
-            }),
-          });
-        })
-      );
 
       setTodaySessionStates((previous) => ({
         ...previous,
-        [sessionId]: { ...previous[sessionId], status: "closed" },
+        [sessionId]: {
+          ...previous[sessionId],
+          status: "closed",
+          cancel: true,
+        },
       }));
 
-      await loadTodayCustomers();
-      await loadCustomers();
-      toast.success("Session closed and remaining waiting bookings cancelled.");
+      await Promise.all([
+        loadTodayCustomers(),
+        loadCustomers(),
+      ]);
+
+      toast.success(
+        `Session cancelled. ${result.bookingsUpdated || 0} waiting bookings moved to pending.`
+      );
+
+      return true;
+
     } catch (error) {
-      toast.error(error.message || "Unable to close session and cancel bookings.");
+      toast.error(
+        error.message || "Unable to cancel session."
+      );
+
+      return false;
+
     } finally {
       setUpdatingSessionId("");
     }
   }
 
-  const startTodaySession = (slot) => updateTodaySession(slot, "start");
-  const closeTodaySession = (slot) => updateTodaySession(slot, "close");
+  const startTodaySession = (slot) =>
+    updateTodaySession(slot, "start");
+
+  const closeTodaySession = (slot) =>
+    updateTodaySession(slot, "close");
+
+  const cancelTodaySession = (slot) =>
+    updateTodaySession(slot, "cancel");
 
   const loadTodaySessionStates = useCallback(async () => {
     if (!isDoctor) return;
+
     try {
-      const params = new URLSearchParams({ role, date: todayDate });
-      const response = await fetch(`${API.sessions}?${params.toString()}`, {
-        method: "GET", cache: "no-store", headers: { Accept: "application/json" },
+      const params = new URLSearchParams({
+        role,
+        date: todayDate,
       });
+
+      const response = await fetch(`${API.sessions}?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result?.error || "Unable to load session states.");
+
+      if (!response.ok) {
+        throw new Error(result?.error || "Unable to load session states.");
+      }
+
       const list = result?.sessions || result?.data?.sessions || [];
       const next = {};
-      if (Array.isArray(list)) for (const session of list) {
-        const key = String(session?.sessionId || session?.id || session?.value || "");
-        if (key) next[key] = { ...session, status: session.status || "not-started" };
+
+      if (Array.isArray(list)) {
+        for (const session of list) {
+          const key = String(
+            session?.sessionId || session?.id || session?.value || ""
+          );
+
+          if (key) {
+            next[key] = {
+              ...session,
+              status: session.status || "not-started",
+              startedAt: session.startedAt || null,
+            };
+          }
+        }
       }
+
       setTodaySessionStates(next);
     } catch (error) {
       console.error("Unable to load today's session states:", error);
     }
   }, [isDoctor, role, todayDate]);
 
-  const todayCheckupStart = (slot) =>
-    slot?.checkupStartTime || slot?.open || "Not configured";
+  const todayCheckupStart = (slot) => {
+    const sessionId = String(
+      slot?.sessionId || slot?.id || slot?.value || ""
+    );
+
+    const sessionState = todaySessionStates[sessionId];
+
+    if (sessionState?.startedAt) {
+      const startedAt = new Date(sessionState.startedAt);
+
+      if (!Number.isNaN(startedAt.getTime())) {
+        return startedAt.toLocaleTimeString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: true,
+        });
+      }
+    }
+
+    return slot?.checkupStartTime || slot?.open || "Not configured";
+  };
 
   const loadInitialData = useCallback(async () => {
     setLoadingSchedule(true);
@@ -2023,7 +2299,6 @@ export default function TeamDashboard({ role = "staff" }) {
           profileData?.clinicName ||
           "",
         services: profileData?.services || [],
-      
       };
 
       setProfile(nextProfile);
@@ -2246,15 +2521,12 @@ export default function TeamDashboard({ role = "staff" }) {
     }
   }
 
-
-
-const isSelectedDateHoliday = useMemo(() => {
+  const isSelectedDateHoliday = useMemo(() => {
     const holidayList = profile?.holidays || profile?.holidayDates || [];
     return isHolidayDate(selectedDate, holidayList);
   }, [selectedDate, profile?.holidays, profile?.holidayDates]);
 
   const slots = useMemo(() => {
-    // If doctor is on holiday, return no slots
     if (isSelectedDateHoliday) return [];
 
     const dayName = getDayName(selectedDate);
@@ -2273,11 +2545,12 @@ const isSelectedDateHoliday = useMemo(() => {
     return daySlots.map(normalizeSlot).filter((slot) => slot.value);
   }, [schedule, selectedDate, isSelectedDateHoliday]);
 
-const isBookingDateHoliday = useMemo(() => {
+  const isBookingDateHoliday = useMemo(() => {
     const holidayList = profile?.holidays || profile?.holidayDates || [];
     return isHolidayDate(bookingForm.date, holidayList);
   }, [bookingForm.date, profile?.holidays, profile?.holidayDates]);
 
+  // Compute available modal slots and check teamSession state for 'closed' status
   const modalSlots = useMemo(() => {
     if (!bookingForm.date || isBookingDateHoliday) return [];
 
@@ -2297,8 +2570,20 @@ const isBookingDateHoliday = useMemo(() => {
 
     return daySlots
       .map(normalizeSlot)
-      .filter((slot) => slot.value);
-  }, [schedule, bookingForm.date, isBookingDateHoliday]);
+      .filter((slot) => slot.value)
+      .map((slot) => {
+        // Check if selected appointment date is today and cross reference session states from teamSession
+        const isToday = bookingForm.date === todayDate;
+        const sessionState = isToday
+          ? todaySessionStates[String(slot.value)]?.status || "not-started"
+          : "not-started";
+
+        return {
+          ...slot,
+          isClosed: sessionState === "closed",
+        };
+      });
+  }, [schedule, bookingForm.date, isBookingDateHoliday, todayDate, todaySessionStates]);
 
   useEffect(() => {
     if (!slots.length) {
@@ -2313,149 +2598,149 @@ const isBookingDateHoliday = useMemo(() => {
     );
   }, [slots]);
 
-
   useEffect(() => {
-  if (!bookingModalOpen) return;
+    if (!bookingModalOpen) return;
 
-  setBookingForm((prev) => {
-    const slotStillAvailable = modalSlots.some(
-      (slot) => slot.value === prev.slot
-    );
+    setBookingForm((prev) => {
+      const openModalSlots = modalSlots.filter((slot) => !slot.isClosed);
+      const slotStillAvailable = openModalSlots.some(
+        (slot) => slot.value === prev.slot
+      );
 
-    const nextSlot = slotStillAvailable
-      ? prev.slot
-      : modalSlots[0]?.value || "";
+      const nextSlot = slotStillAvailable
+        ? prev.slot
+        : openModalSlots[0]?.value || "";
 
-    if (prev.slot === nextSlot) return prev;
+      if (prev.slot === nextSlot) return prev;
 
-    return {
-      ...prev,
-      slot: nextSlot,
-    };
-  });
-}, [bookingModalOpen, modalSlots]);
+      return {
+        ...prev,
+        slot: nextSlot,
+      };
+    });
+  }, [bookingModalOpen, modalSlots]);
 
-  // Open patient booking modal pre-populated with active/selected slot
   function handleOpenBookingModal() {
+    const activeDate = selectedDate || getLocalDate();
     setBookingForm({
       patientName: "",
       phone: "",
       gender: "Male",
       priority: "normal",
-      date: selectedDate || getLocalDate(),
+      date: activeDate,
       slot: selectedSlot || slots[0]?.value || "",
     });
     setBookingModalOpen(true);
   }
 
-  
-async function handleBookPatient(e) {
-  e.preventDefault();
+  async function handleBookPatient(e) {
+    e.preventDefault();
 
-  if (!bookingForm.date) {
-    toast.error("Please select a booking date.");
-    return;
-  }
+    if (!bookingForm.date) {
+      toast.error("Please select an appointment date.");
+      return;
+    }
 
-  if (bookingForm.date < todayDate) {
-    toast.error("Past dates cannot be selected.");
-    return;
-  }
+    if (bookingForm.date < todayDate) {
+      toast.error("Past dates cannot be selected.");
+      return;
+    }
 
-  const selectedSlot = modalSlots.find(
-    (slot) => slot.value === bookingForm.slot
-  );
+    const selectedSlot = modalSlots.find(
+      (slot) => slot.value === bookingForm.slot
+    );
 
-  if (!selectedSlot) {
-    toast.error("Please select a valid session for the chosen date.");
-    return;
-  }
+    if (!selectedSlot) {
+      toast.error("Please select a valid session for the chosen appointment date.");
+      return;
+    }
 
-  if (!bookingForm.patientName?.trim()) {
-    toast.error("Please enter patient name.");
-    return;
-  }
+    if (selectedSlot.isClosed) {
+      toast.error("This session has been closed for the selected date.");
+      return;
+    }
 
-  setBookingLoading(true);
+    if (!bookingForm.patientName?.trim()) {
+      toast.error("Please enter patient name.");
+      return;
+    }
 
-  try {
-    const payload = {
-      role,
+    setBookingLoading(true);
 
-      // Appointment details
-      date: bookingForm.date,
-      time:
-        selectedSlot.time ||
-        selectedSlot.checkupStartTime ||
-        selectedSlot.checkupStart ||
-        selectedSlot.open ||
-        bookingForm.slot,
-
-      slot: {
-        open: selectedSlot.open || "",
-        close: selectedSlot.close || "",
-        checkupStartTime:
+    try {
+      const payload = {
+        role,
+        date: bookingForm.date,
+        time:
+          selectedSlot.time ||
           selectedSlot.checkupStartTime ||
           selectedSlot.checkupStart ||
           selectedSlot.open ||
-          "",
-      },
+          bookingForm.slot,
 
-      // Patient details
-      patient: {
-        name: bookingForm.patientName.trim(),
-        type: "walk-in",
-        gender: bookingForm.gender || "",
-        ...(bookingForm.age !== undefined &&
-        bookingForm.age !== ""
-          ? { age: Number(bookingForm.age) }
-          : {}),
-      },
+        slot: {
+          open: selectedSlot.open || "",
+          close: selectedSlot.close || "",
+          checkupStartTime:
+            selectedSlot.checkupStartTime ||
+            selectedSlot.checkupStart ||
+            selectedSlot.open ||
+            "",
+        },
 
-      phone: bookingForm.phone?.trim() || "",
-      priority: bookingForm.priority || "normal",
-      isEmergency: bookingForm.priority === "emergency",
+        patient: {
+          name: bookingForm.patientName.trim(),
+          type: "walk-in",
+          gender: bookingForm.gender || "",
+          ...(bookingForm.age !== undefined &&
+          bookingForm.age !== ""
+            ? { age: Number(bookingForm.age) }
+            : {}),
+        },
 
-      serviceName: "Consultation",
-      service: "General Consultation",
-    };
+        phone: bookingForm.phone?.trim() || "",
+        priority: bookingForm.priority || "normal",
+        isEmergency: bookingForm.priority === "emergency",
 
-    const response = await fetch(API.customers, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      cache: "no-store",
-      body: JSON.stringify(payload),
-    });
+        serviceName: "Consultation",
+        service: "General Consultation",
+      };
 
-    const result = await response.json().catch(() => ({}));
+      const response = await fetch(API.customers, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify(payload),
+      });
 
-    if (!response.ok) {
-      throw new Error(
-        result?.error ||
-          result?.message ||
-          "Failed to book appointment."
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          result?.error ||
+            result?.message ||
+            "Failed to book appointment."
+        );
+      }
+
+      toast.success("Patient booked successfully!");
+
+      setBookingModalOpen(false);
+
+      await Promise.all([
+        loadCustomers(),
+        loadTodayCustomers(),
+      ]);
+    } catch (err) {
+      toast.error(
+        err.message || "Failed to book appointment."
       );
+    } finally {
+      setBookingLoading(false);
     }
-
-    toast.success("Patient booked successfully!");
-
-    setBookingModalOpen(false);
-
-    await Promise.all([
-      loadCustomers(),
-      loadTodayCustomers(),
-    ]);
-  } catch (err) {
-    toast.error(
-      err.message || "Failed to book appointment."
-    );
-  } finally {
-    setBookingLoading(false);
   }
-}
-
 
   const filteredCustomers = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -2591,9 +2876,7 @@ async function handleBookPatient(e) {
   return (
     <div className="min-h-screen bg-[#f7f8fc] text-slate-800">
       {mobileMenuOpen && (
-        <button
-          type="button"
-          aria-label="Close navigation menu"
+        <div
           onClick={() => setMobileMenuOpen(false)}
           className="fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-[2px] lg:hidden"
         />
@@ -2639,7 +2922,7 @@ async function handleBookPatient(e) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-3">
+        <div className="flex-1 overflow-y-auto px-4 py-3 scrollbar-none">
           <p className="px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
             MENU
           </p>
@@ -2788,50 +3071,42 @@ async function handleBookPatient(e) {
             </div>
 
             <div className="flex shrink-0 items-center gap-4 sm:gap-5">
-  {/* Book for Patient */}
-  <button
-    type="button"
-    onClick={handleOpenBookingModal}
-    title="Book for Patient"
-    aria-label="Book for Patient"
-    className="group relative flex h-9 w-9 sm:w-auto items-center justify-center gap-1.5 rounded-xl bg-violet-600 px-0 sm:px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-violet-700"
-  >
-    <Plus size={16} />
+              <button
+                type="button"
+                onClick={handleOpenBookingModal}
+                title="Book for Patient"
+                aria-label="Book for Patient"
+                className="group relative flex h-9 w-9 sm:w-auto items-center justify-center gap-1.5 rounded-xl bg-violet-600 px-0 sm:px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-violet-700"
+              >
+                <Plus size={16} />
+                <span className="hidden sm:inline">Book for Patient</span>
+                <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 sm:hidden">
+                  Book for Patient
+                </span>
+              </button>
 
-    <span className="hidden sm:inline">Book for Patient</span>
-
-    {/* Tooltip for mobile */}
-    <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 sm:hidden">
-      Book for Patient
-    </span>
-  </button>
-
-  {/* Refresh */}
-  <button
-    type="button"
-    onClick={handleRefresh}
-    disabled={refreshing || loadingSchedule || loadingCustomers}
-    title="Refresh dashboard"
-    aria-label="Refresh dashboard"
-    className="group relative flex h-9 w-9 sm:w-auto items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-0 sm:px-3 text-sm font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50"
-  >
-    <RefreshCw
-      size={16}
-      className={
-        refreshing || loadingSchedule || loadingCustomers
-          ? "animate-spin"
-          : ""
-      }
-    />
-
-    <span className="hidden sm:inline">Refresh</span>
-
-    {/* Tooltip for mobile */}
-    <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 sm:hidden">
-      Refresh dashboard
-    </span>
-  </button>
-</div>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={refreshing || loadingSchedule || loadingCustomers}
+                title="Refresh dashboard"
+                aria-label="Refresh dashboard"
+                className="group relative flex h-9 w-9 sm:w-auto items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-0 sm:px-3 text-sm font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50"
+              >
+                <RefreshCw
+                  size={16}
+                  className={
+                    refreshing || loadingSchedule || loadingCustomers
+                      ? "animate-spin"
+                      : ""
+                  }
+                />
+                <span className="hidden sm:inline">Refresh</span>
+                <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 sm:hidden">
+                  Refresh dashboard
+                </span>
+              </button>
+            </div>
           </div>
         </header>
 
@@ -2869,7 +3144,7 @@ async function handleBookPatient(e) {
                 description="Manage patient checkups session by session. Emergency patients receive the highest priority."
               />
 
-              {todaySlots.length > 0 && (
+              {(todaySlots.length > 0 && !isBookingDateHoliday) && (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="flex items-center gap-3">
@@ -2932,11 +3207,9 @@ async function handleBookPatient(e) {
                 </div>
               )}
 
-              {todaySlots.length === 0 ? (
+              {(todaySlots.length === 0 || isBookingDateHoliday) ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-12 text-center">
-                  <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-500
-                    ${todaySlots.length === 0 ?"hidden":"block"} 
-                    `}>
+                  <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 ${(todaySlots.length === 0 || isBookingDateHoliday) ? "hidden" : "block"}`}>
                     <CalendarDays size={26} />
                   </div>
                   <div className="mt-4">
@@ -2959,7 +3232,7 @@ async function handleBookPatient(e) {
                     const emergencyCount = patients.filter(
                       (patient) => getPriorityRank(patient) === 0
                     ).length;
-                  
+
                     const busy = updatingSessionId === sessionId;
                     const capacity = Number(slot.capacity);
                     const hasCapacity =
@@ -3035,7 +3308,7 @@ async function handleBookPatient(e) {
                                   <div className="flex items-center gap-2 text-emerald-600">
                                     <Stethoscope size={15} />
                                     <p className="text-xs font-medium">
-                                      Checkup starts
+                                      Checkup starts(Expected)
                                     </p>
                                   </div>
                                   <p className="mt-2 text-sm font-bold text-slate-900">
@@ -3094,17 +3367,14 @@ async function handleBookPatient(e) {
                                   <span className="rounded-md bg-white px-2 py-0.5 font-bold">
                                     {emergencyCount}
                                   </span>
+                                 
                                 </span>
-
-                              
 
                                 <span className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
                                   <Users size={15} />
                                   Other patients
                                   <span className="rounded-md bg-slate-100 px-2 py-0.5 font-bold">
-                                    {patients.length -
-                                      emergencyCount
-                                    }
+                                    {patients.length - emergencyCount}
                                   </span>
                                 </span>
                               </div>
@@ -3203,6 +3473,10 @@ async function handleBookPatient(e) {
                         ) : (
                           <div className="divide-y divide-slate-100">
                             {patients.map((customer, patientIndex) => {
+
+ console.log("Patient Index:", patientIndex);
+  console.log("Patient Object:", customer);
+  console.log("Patient Keys:", Object.keys(customer));
                               const id =
                                 customer?._id ||
                                 customer?.id ||
@@ -3211,13 +3485,16 @@ async function handleBookPatient(e) {
 
                               const status = getCustomerStatus(customer);
                               const priority = getPriorityRank(customer);
+                              const arriveTime=getArriveTime(customer)
                               const isUpdating =
                                 updatingCustomerId === String(id);
                               const customerName =
                                 getCustomerName(customer) || "Unknown patient";
                               const token = getCustomerToken(customer) || "—";
                               const phone = getCustomerPhone(customer);
-
+                              const gender = getCustomerGender(customer);
+                              const age = getCustomerAge(customer);
+                              const webPushEnabled=customer.webPushEnabled;
                               return (
                                 <div
                                   key={String(id)}
@@ -3260,36 +3537,54 @@ async function handleBookPatient(e) {
 
                                         {priority === 0 && (
                                           <span className="rounded-md border border-red-200 bg-red-100 px-2 py-1 text-[10px] font-extrabold tracking-wide text-red-700">
-                                            EMERGENCY · P1
+                                            EMERGENCY
                                           </span>
                                         )}
-
-                                        
                                       </div>
 
-                                      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+                                      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-xs text-slate-500">
                                         <span className="inline-flex items-center gap-1.5 font-semibold text-slate-700">
                                           <Ticket size={14} />
-                                          Token: {token}
+                                          Token: {token || "N/A"}
                                         </span>
 
-                                        {phone && (
-                                          <span className="inline-flex items-center gap-1.5">
-                                            <Phone size={14} />
-                                            {phone}
-                                          </span>
-                                        )}
+                                        <span className="inline-flex items-center gap-1.5">
+                                          <Phone size={14} />
+                                          {phone || "N/A"}
+                                        </span>
+
+                                        <span className="inline-flex items-center gap-1.5">
+                                          <User size={14} />
+                                          Age: {age || "N/A"}
+                                        </span>
+
+                                        <span className="inline-flex items-center gap-1.5 capitalize">
+                                          <VenusAndMars size={14} />
+                                          {gender || "N/A"}
+                                        </span>
+                                       
                                       </div>
 
-                                      <div className="mt-3">
-                                        <StatusBadge status={status} />
-                                      </div>
+                                    
+<div className="mt-3 flex flex-wrap items-center gap-2">
+  <StatusBadge status={status} />
+
+  {arriveTime && priority === 0 && (
+    <span className="inline-flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700">
+      <Clock size={14} className="shrink-0" />
+    Patient will arrive at : {arriveTime}
+    </span>
+  )}
+</div>
+ 
+ 
+
                                     </div>
                                   </div>
 
                                   <div className="flex shrink-0 flex-col gap-2 lg:min-w-44 lg:items-end">
-                                    {status === "waiting" && (
-                                      <button
+                                  {status === "waiting" && (<>
+                                     <button
                                         type="button"
                                         onClick={() => startCheckup(customer)}
                                         disabled={
@@ -3315,7 +3610,28 @@ async function handleBookPatient(e) {
                                         )}
                                         Start Checkup
                                       </button>
-                                    )}
+  <button
+    type="button"
+    onClick={() => sendPatientNotification(customer)}
+    disabled={
+      Boolean(updatingCustomerId) ||
+      Boolean(updatingSessionId) ||
+      notifyingCustomerId === customer._id
+      || !webPushEnabled
+    }
+    className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 shadow-sm transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto"
+  >
+    {notifyingCustomerId === customer._id ? (
+      <LoaderCircle size={16} className="animate-spin" />
+    ) : (
+      <Bell size={16} />
+    )}
+    {notifyingCustomerId === customer._id
+      ? "Sending..."
+      : "Notify Patient"}
+  </button>
+  </>
+)}
 
                                     {status === "serving" && (
                                       <button
@@ -3498,52 +3814,49 @@ async function handleBookPatient(e) {
                   </Field>
                 </div>
 
-            <div className="mt-5 flex flex-col gap-3 rounded-xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-  <div className="flex items-start gap-3">
-    <div
-      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm ${
-        isSelectedDateHoliday
-          ? "bg-amber-100 text-amber-700"
-          : "bg-white text-violet-600"
-      }`}
-    >
-      {isSelectedDateHoliday ? (
-        <CalendarDays size={19} />
-      ) : (
-        <Clock3 size={19} />
-      )}
-    </div>
+                <div className="mt-5 flex flex-col gap-3 rounded-xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm ${
+                        isSelectedDateHoliday
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-white text-violet-600"
+                      }`}
+                    >
+                      {isSelectedDateHoliday ? (
+                        <CalendarDays size={19} />
+                      ) : (
+                        <Clock3 size={19} />
+                      )}
+                    </div>
 
-    <div>
-      <p className="text-sm font-semibold text-slate-800">
-        {isSelectedDateHoliday
-          ? "Doctor is on Holiday"
-          : selectedSlot || "No session selected"}
-      </p>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">
+                        {isSelectedDateHoliday
+                          ? "Doctor is on Holiday"
+                          : selectedSlot || "No session selected"}
+                      </p>
 
-      <p className="mt-1 text-xs text-slate-500">
-        {isSelectedDateHoliday
-          ? "The doctor is unavailable on this date."
-          : slots.length
-            ? `${slots.length} session${slots.length === 1 ? "" : "s"} available on this day`
-            : "No sessions configured for this day of the week."}
-      </p>
-    </div>
-  </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {isSelectedDateHoliday
+                          ? "The doctor is unavailable on this date."
+                          : slots.length
+                            ? `${slots.length} session${slots.length === 1 ? "" : "s"} available on this day`
+                            : "No sessions configured for this day of the week."}
+                      </p>
+                    </div>
+                  </div>
 
-  {!isSelectedDateHoliday && slots.length > 0 && (
-    <button
-      type="button"
-      onClick={() => navigate("bookings")}
-      className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-violet-200 hover:text-violet-700"
-    >
-      Open queue
-      <ArrowRight size={15} />
-    </button>
-  )}
- 
-
-                
+                  {!isSelectedDateHoliday && slots.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => navigate("bookings")}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-violet-200 hover:text-violet-700"
+                    >
+                      Open queue
+                      <ArrowRight size={15} />
+                    </button>
+                  )}
                 </div>
               </section>
 
@@ -3742,20 +4055,23 @@ async function handleBookPatient(e) {
                 ) : (
                   <>
                     <div className="hidden overflow-x-auto md:block">
-                      <table className="w-full min-w-[650px] text-left">
+                      <table className="w-full min-w-auto text-left">
                         <thead>
                           <tr className="border-b border-slate-100 bg-slate-50/80">
                             <th className="px-5 py-3 text-xs font-semibold text-slate-500">
                               Customer
                             </th>
                             <th className="px-5 py-3 text-xs font-semibold text-slate-500">
-                              Token / Reference
+                              Token
                             </th>
-                              <th className="px-5 py-3 text-xs font-semibold text-slate-500">
+                            <th className="px-5 py-3 text-xs font-semibold text-slate-500">
                               Type
                             </th>
                             <th className="px-5 py-3 text-xs font-semibold text-slate-500">
                               Phone
+                            </th>
+                            <th className="px-5 py-3 text-xs font-semibold text-slate-500">
+                              Age
                             </th>
                             <th className="px-5 py-3 text-xs font-semibold text-slate-500">
                               Gender
@@ -3802,11 +4118,14 @@ async function handleBookPatient(e) {
                               <td className="px-5 py-4 text-sm font-semibold text-slate-700">
                                 {getCustomerToken(customer)}
                               </td>
-<td className="px-5 py-4 text-sm text-slate-600 capitalize">
+                              <td className="px-5 py-4 text-sm text-slate-600 capitalize">
                                 {getCustomerType(customer) || "—"}
                               </td>
                               <td className="px-5 py-4 text-sm text-slate-600">
                                 {getCustomerPhone(customer) || "—"}
+                              </td>
+                              <td className="px-5 py-4 text-sm text-slate-600">
+                                {getCustomerAge(customer) || "—"}
                               </td>
                               <td className="px-5 py-4 text-sm text-slate-600">
                                 {getCustomerGender(customer) || "—"}
@@ -3831,7 +4150,6 @@ async function handleBookPatient(e) {
                           }
                           className="p-4"
                         >
-                          
                           <div className="flex items-start gap-3">
                             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-sm font-bold text-violet-700">
                               {getCustomerName(customer)
@@ -3902,333 +4220,321 @@ async function handleBookPatient(e) {
           )}
 
           {/* Book Patient Modal */}
-        
-
-{bookingModalOpen && (
-  <div
-    className="fixed h-screen inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-950/60 p-3 backdrop-blur-sm"
-  
-  >
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="book-patient-title"
-      className="my-auto flex max-h-[85dvh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
-    >
-      {/* Compact Header */}
-      <div className="relative shrink-0 overflow-hidden border-b border-slate-100 bg-gradient-to-r from-violet-50 to-indigo-50 px-4 py-3.5">
-        <div className="absolute -right-8 -top-10 h-24 w-24 rounded-full bg-violet-200/30 blur-2xl" />
-
-        <div className="relative flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white shadow-md shadow-violet-600/20">
-              <UserPlus size={20} />
-            </div>
-
-            <div className="min-w-0">
-              <h3
-                id="book-patient-title"
-                className="text-base font-bold tracking-tight text-slate-900"
+          {bookingModalOpen && (
+            <div className="fixed h-screen inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-950/60 p-3 backdrop-blur-sm">
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="book-patient-title"
+                className="my-auto flex max-h-[85dvh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
               >
-                Book for Patient
-              </h3>
-              <p className="mt-0.5 truncate text-xs text-slate-500">
-                {profile?.name
-                  ? `Doctor: ${profile.name}`
-                  : "Create a patient appointment"}
-              </p>
-            </div>
-          </div>
+                <div className="relative shrink-0 overflow-hidden border-b border-slate-100 bg-gradient-to-r from-violet-50 to-indigo-50 px-4 py-3.5">
+                  <div className="absolute -right-8 -top-10 h-24 w-24 rounded-full bg-violet-200/30 blur-2xl" />
 
-          <button
-            type="button"
-            onClick={() => setBookingModalOpen(false)}
-            disabled={bookingLoading}
-            aria-label="Close booking modal"
-            className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-white hover:text-slate-700 disabled:opacity-50"
-          >
-            <X size={18} />
-          </button>
-        </div>
-      </div>
+                  <div className="relative flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white shadow-md shadow-violet-600/20">
+                        <UserPlus size={20} />
+                      </div>
 
-      <form
-        onSubmit={handleBookPatient}
-        className="flex min-h-0 flex-1 flex-col"
-      >
-        {/* Scrollable Form Content */}
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4">
+                      <div className="min-w-0">
+                        <h3
+                          id="book-patient-title"
+                          className="text-base font-bold tracking-tight text-slate-900"
+                        >
+                          Book for Patient
+                        </h3>
+                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                          {profile?.name
+                            ? `Doctor: ${profile.name}`
+                            : "Create a patient appointment"}
+                        </p>
+                      </div>
+                    </div>
 
-          {/* Patient Details */}
-          <section className="space-y-3">
-            <div className="flex items-center gap-2">
-              <span className="h-4 w-1 rounded-full bg-violet-600" />
-              <h4 className="text-sm font-bold text-slate-800">
-                Patient details
-              </h4>
-            </div>
+                    <button
+                      type="button"
+                      onClick={() => setBookingModalOpen(false)}
+                      disabled={bookingLoading}
+                      aria-label="Close booking modal"
+                      className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-white hover:text-slate-700 disabled:opacity-50"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                </div>
 
-            <Field label="Patient name *">
-              <input
-                className={`${inputClass} w-full`}
-                value={bookingForm.patientName}
-                onChange={(e) =>
-                  setBookingForm((prev) => ({
-                    ...prev,
-                    patientName: e.target.value,
-                  }))
-                }
-                placeholder="Enter patient's full name"
-                autoComplete="name"
-                disabled={bookingLoading}
-                required
-              />
-            </Field>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Phone number">
-                <input
-                  className={`${inputClass} w-full min-w-0`}
-                  value={bookingForm.phone}
-                  onChange={(e) =>
-                    setBookingForm((prev) => ({
-                      ...prev,
-                      phone: e.target.value,
-                    }))
-                  }
-                  type="tel"
-                  inputMode="tel"
-                  autoComplete="tel"
-                  placeholder="Mobile number"
-                  disabled={bookingLoading}
-                />
-              </Field>
-
-              <Field label="Gender">
-                <select
-                  className={`${inputClass} w-full appearance-none`}
-                  value={bookingForm.gender}
-                  onChange={(e) =>
-                    setBookingForm((prev) => ({
-                      ...prev,
-                      gender: e.target.value,
-                    }))
-                  }
-                  disabled={bookingLoading}
+                <form
+                  onSubmit={handleBookPatient}
+                  className="flex min-h-0 flex-1 flex-col"
                 >
-                  <option value="Male">Male</option>
-                  <option value="Female">Female</option>
-                  <option value="Other">Other</option>
-                </select>
-              </Field>
-            </div>
-          </section>
+                  <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain scrollbar-thin px-4 py-4">
+                    <section className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <span className="h-4 w-1 rounded-full bg-violet-600" />
+                        <h4 className="text-sm font-bold text-slate-800">
+                          Patient details
+                        </h4>
+                      </div>
 
-          {/* Appointment Schedule */}
-          <section className="space-y-3 rounded-xl border border-violet-100 bg-violet-50/60 p-3">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-violet-600 shadow-sm ring-1 ring-violet-100">
-                <CalendarDays size={18} />
+                      <Field label="Patient name *">
+                        <input
+                          className={`${inputClass} w-full`}
+                          value={bookingForm.patientName}
+                          onChange={(e) =>
+                            setBookingForm((prev) => ({
+                              ...prev,
+                              patientName: e.target.value,
+                            }))
+                          }
+                          placeholder="Enter patient's full name"
+                          autoComplete="name"
+                          disabled={bookingLoading}
+                          required
+                        />
+                      </Field>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field label="Phone number">
+                          <input
+                            className={`${inputClass} w-full min-w-0`}
+                            value={bookingForm.phone}
+                            onChange={(e) =>
+                              setBookingForm((prev) => ({
+                                ...prev,
+                                phone: e.target.value,
+                              }))
+                            }
+                            type="tel"
+                            inputMode="tel"
+                            autoComplete="tel"
+                            placeholder="Mobile number"
+                            disabled={bookingLoading}
+                          />
+                        </Field>
+
+                        <Field label="Gender">
+                          <select
+                            className={`${inputClass} w-full appearance-none`}
+                            value={bookingForm.gender}
+                            onChange={(e) =>
+                              setBookingForm((prev) => ({
+                                ...prev,
+                                gender: e.target.value,
+                              }))
+                            }
+                            disabled={bookingLoading}
+                          >
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                            <option value="Other">Other</option>
+                          </select>
+                        </Field>
+                      </div>
+                    </section>
+
+                    <section className="space-y-3 rounded-xl border border-violet-100 bg-violet-50/60 p-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-violet-600 shadow-sm ring-1 ring-violet-100">
+                          <CalendarDays size={18} />
+                        </div>
+
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Appointment schedule
+                          </h4>
+                          <p className="text-xs text-slate-500">
+                            Select date and session
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <Field label="Appointment date *">
+                          <input
+                            type="date"
+                            className={`${inputClass} w-full bg-white`}
+                            value={bookingForm.date}
+                            min={todayDate}
+                            onChange={(e) => {
+                              const nextDate = e.target.value;
+
+                              setBookingForm((prev) => ({
+                                ...prev,
+                                date: nextDate,
+                                slot: "",
+                              }));
+                            }}
+                            disabled={bookingLoading}
+                            required
+                          />
+                        </Field>
+
+                        <Field label="Available session *">
+                          <select
+                            className={`${inputClass} w-full appearance-none bg-white`}
+                            value={bookingForm.slot}
+                            onChange={(e) =>
+                              setBookingForm((prev) => ({
+                                ...prev,
+                                slot: e.target.value,
+                              }))
+                            }
+                            disabled={
+                              bookingLoading || modalSlots.length === 0
+                            }
+                            required
+                          >
+                            <option value="">
+                              {modalSlots.length > 0
+                                ? "Select a session"
+                                : "No sessions available"}
+                            </option>
+
+                            {modalSlots.map((s) => (
+                              <option
+                                key={s.value}
+                                value={s.value}
+                                disabled={s.isClosed}
+                              >
+                                {s.label} {s.isClosed ? "(Closed)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                      </div>
+
+                      <div
+                        className={`flex items-start gap-2 rounded-lg px-3 py-2 text-xs ${
+                          isBookingDateHoliday
+                            ? "bg-amber-50 text-amber-900 border border-amber-200"
+                            : modalSlots.length > 0
+                              ? "bg-white text-slate-600 border border-slate-100"
+                              : "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        <CalendarDays
+                          size={14}
+                          className={`mt-0.5 shrink-0 ${
+                            isBookingDateHoliday
+                              ? "text-amber-600"
+                              : modalSlots.length > 0
+                                ? "text-violet-600"
+                                : "text-slate-400"
+                          }`}
+                        />
+
+                        <p>
+                          {isBookingDateHoliday
+                            ? "Doctor is on holiday on this date. Please choose another date."
+                            : modalSlots.length > 0
+                              ? `${modalSlots.length} scheduled session${modalSlots.length === 1 ? "" : "s"} available for this date.`
+                              : "No scheduled sessions for this date. Please select another date."}
+                        </p>
+                      </div>
+                    </section>
+
+                    <section className="space-y-2.5">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-800">
+                          Patient priority
+                        </h4>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Choose the appropriate category
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          {
+                            id: "normal",
+                            label: "Normal",
+                            description: "Standard",
+                          },
+                          {
+                            id: "emergency",
+                            label: "Emergency",
+                            description: "Priority 1",
+                          },
+                        ].map((item) => {
+                          const active = bookingForm.priority === item.id;
+
+                          const activeStyle =
+                            item.id === "emergency"
+                              ? "border-red-300 bg-red-50 text-red-800"
+                              : "border-violet-300 bg-violet-50 text-violet-800";
+
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              disabled={bookingLoading}
+                              onClick={() =>
+                                setBookingForm((prev) => ({
+                                  ...prev,
+                                  priority: item.id,
+                                }))
+                              }
+                              aria-pressed={active}
+                              className={`min-w-0 rounded-lg border px-2 py-2.5 text-left transition ${
+                                active
+                                  ? `${activeStyle} ring-1 ring-current/10`
+                                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                              } disabled:cursor-not-allowed disabled:opacity-60`}
+                            >
+                              <span className="block truncate text-xs font-bold">
+                                {item.label}
+                              </span>
+                              <span className="mt-1 block text-[10px] opacity-75">
+                                {item.description}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  </div>
+
+                  <div className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-white px-4 py-3">
+                    <button
+                      type="button"
+                      disabled={bookingLoading}
+                      onClick={() => setBookingModalOpen(false)}
+                      className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={
+                        bookingLoading ||
+                        modalSlots.length === 0 ||
+                        !bookingForm.slot ||
+                        Boolean(modalSlots.find((s) => s.value === bookingForm.slot)?.isClosed)
+                      }
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {bookingLoading ? (
+                        <LoaderCircle
+                          size={15}
+                          className="animate-spin"
+                        />
+                      ) : (
+                        <UserPlus size={15} />
+                      )}
+
+                      {bookingLoading ? "Booking..." : "Book patient"}
+                    </button>
+                  </div>
+                </form>
               </div>
-
-              <div>
-                <h4 className="text-sm font-bold text-slate-900">
-                  Appointment schedule
-                </h4>
-                <p className="text-xs text-slate-500">
-                  Select date and session
-                </p>
-              </div>
             </div>
-
-            <div className="space-y-3">
-              <Field label="Appointment date *">
-                <input
-                  type="date"
-                  className={`${inputClass} w-full bg-white`}
-                  value={bookingForm.date}
-                  min={todayDate}
-                  onChange={(e) => {
-                    const nextDate = e.target.value;
-
-                    setBookingForm((prev) => ({
-                      ...prev,
-                      date: nextDate,
-                      slot: "",
-                    }));
-                  }}
-                  disabled={bookingLoading}
-                  required
-                />
-              </Field>
-
-              <Field label="Available session *">
-                <select
-                  className={`${inputClass} w-full appearance-none bg-white`}
-                  value={bookingForm.slot}
-                  onChange={(e) =>
-                    setBookingForm((prev) => ({
-                      ...prev,
-                      slot: e.target.value,
-                    }))
-                  }
-                  disabled={
-                    bookingLoading || modalSlots.length === 0
-                  }
-                  required
-                >
-                  <option value="">
-                    {modalSlots.length > 0
-                      ? "Select a session"
-                      : "No sessions available"}
-                  </option>
-
-                  {modalSlots.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-
-          <div
-  className={`flex items-start gap-2 rounded-lg px-3 py-2 text-xs ${
-    isBookingDateHoliday
-      ? "bg-amber-50 text-amber-900 border border-amber-200"
-      : modalSlots.length > 0
-        ? "bg-white text-slate-600 border border-slate-100"
-        : "bg-slate-100 text-slate-700"
-  }`}
->
-  <CalendarDays
-    size={14}
-    className={`mt-0.5 shrink-0 ${
-      isBookingDateHoliday
-        ? "text-amber-600"
-        : modalSlots.length > 0
-          ? "text-violet-600"
-          : "text-slate-400"
-    }`}
-  />
-
-  <p>
-    {isBookingDateHoliday
-      ? "Doctor is on holiday on this date. Please choose another date."
-      : modalSlots.length > 0
-        ? `${modalSlots.length} scheduled session${modalSlots.length === 1 ? "" : "s"} available for this weekday.`
-        : "No scheduled sessions for this weekday. Please select another date."}
-  </p>
-</div>
-          </section>
-
-          {/* Patient Priority */}
-          <section className="space-y-2.5">
-            <div>
-              <h4 className="text-sm font-bold text-slate-800">
-                Patient priority
-              </h4>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Choose the appropriate category
-              </p>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                {
-                  id: "normal",
-                  label: "Normal",
-                  description: "Standard",
-                },
-              
-                {
-                  id: "emergency",
-                  label: "Emergency",
-                  description: "Priority 1",
-                },
-              ].map((item) => {
-                const active =
-                  bookingForm.priority === item.id;
-
-                const activeStyle =
-                  item.id === "emergency"
-                    ? "border-red-300 bg-red-50 text-red-800"
-                    
-                      : "border-violet-300 bg-violet-50 text-violet-800";
-
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    disabled={bookingLoading}
-                    onClick={() =>
-                      setBookingForm((prev) => ({
-                        ...prev,
-                        priority: item.id,
-                      }))
-                    }
-                    aria-pressed={active}
-                    className={`min-w-0 rounded-lg border px-2 py-2.5 text-left transition ${
-                      active
-                        ? `${activeStyle} ring-1 ring-current/10`
-                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                    } disabled:cursor-not-allowed disabled:opacity-60`}
-                  >
-                    <span className="block truncate text-xs font-bold">
-                      {item.label}
-                    </span>
-                    <span className="mt-1 block text-[10px] opacity-75">
-                      {item.description}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        </div>
-
-        {/* Fixed Compact Footer */}
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-white px-4 py-3">
-          <button
-            type="button"
-            disabled={bookingLoading}
-            onClick={() => setBookingModalOpen(false)}
-            className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-
-          <button
-            type="submit"
-            disabled={
-              bookingLoading ||
-              modalSlots.length === 0 ||
-              !bookingForm.slot
-            }
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {bookingLoading ? (
-              <LoaderCircle
-                size={15}
-                className="animate-spin"
-              />
-            ) : (
-              <UserPlus size={15} />
-            )}
-
-            {bookingLoading ? "Booking..." : "Book patient"}
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-)}
-
-
+          )}
 
           {isDoctor && confirmComplete && (
             <div
-              className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
+              className="fixed h-full inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
               onClick={(event) => {
                 if (
                   event.target === event.currentTarget &&
@@ -4300,7 +4606,7 @@ async function handleBookPatient(e) {
           </footer>
         </main>
       </div>
-      <GoUpButton/>
+      <GoUpButton />
     </div>
   );
 }

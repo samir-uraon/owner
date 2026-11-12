@@ -705,7 +705,7 @@ export default function MapPicker({
               sm:bottom-5 sm:right-5 sm:top-auto
               sm:h-11 sm:gap-2 sm:rounded-xl sm:px-4 sm:text-sm
             "
-          >
+          > 
             {locating ? (
               <LoaderCircle
                 size={16}

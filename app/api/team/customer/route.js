@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { ObjectId } from "mongodb";
@@ -6,6 +7,8 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 const TIME_ZONE = "Asia/Kolkata";
 const VALID_ROLES = ["doctor", "staff"];
+
+ 
 
 function json(data, status = 200) {
   return NextResponse.json(data, {
@@ -43,7 +46,10 @@ function idVariants(value) {
 function dateKey(value) {
   if (!value) return "";
 
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  if (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value)
+  ) {
     return value;
   }
 
@@ -71,10 +77,16 @@ function normalizeSlot(slot) {
   if (typeof slot === "string") return slot.trim();
 
   if (typeof slot === "object") {
-    const open = String(slot.open || slot.start || slot.from || "").trim();
-    const close = String(slot.close || slot.end || slot.to || "").trim();
+    const open = String(
+      slot.open || slot.start || slot.from || ""
+    ).trim();
+
+    const close = String(
+      slot.close || slot.end || slot.to || ""
+    ).trim();
 
     if (slot.value) return String(slot.value).trim();
+
     if (open && close) return `${open}-${close}`;
 
     return open || close || slot.label || "";
@@ -83,17 +95,60 @@ function normalizeSlot(slot) {
   return String(slot).trim();
 }
 
-function normalizeBooking(booking) {
-  const patient = booking.patient || booking.customer || {};
-  const slotObject =
-    booking.slot && typeof booking.slot === "object" ? booking.slot : {};
+// Fetch Web Push status from the users collection.
+async function fetchWebPush(db, booking) {
+  try {
+    if (
+      !booking?.userId ||
+      !ObjectId.isValid(String(booking.userId))
+    ) {
+      return false;
+    }
 
-  const slotLabel = normalizeSlot(booking.slotTime || booking.slot);
+    const user = await db.collection("users").findOne(
+      {
+        _id: new ObjectId(String(booking.userId)),
+      },
+      {
+        projection: {
+          webPushEnabled: 1,
+        },
+      }
+    );
+
+    return Boolean(user?.webPushEnabled);
+  } catch (error) {
+    console.error("Fetch Web Push status error:", error);
+    return false;
+  }
+}
+
+// Normalize booking response.
+// IMPORTANT: This function is async because it fetches Web Push status.
+async function normalizeBooking(db, booking) {
+  const patient = booking.patient || booking.customer || {};
+
+  const slotObject =
+    booking.slot && typeof booking.slot === "object"
+      ? booking.slot
+      : {};
+
+  const slotLabel = normalizeSlot(
+    booking.slotTime || booking.slot
+  );
+
+  const webPushEnabled = await fetchWebPush(db, booking);
 
   return {
     id: String(booking._id),
     _id: String(booking._id),
+
     bookingReference: booking.bookingReference || "",
+
+    userId: booking.userId || "",
+
+    // Web Push status comes from users collection.
+    webPushEnabled: Boolean(webPushEnabled),
 
     token:
       booking.token ||
@@ -119,15 +174,25 @@ function normalizeBooking(booking) {
       "",
 
     email: patient.email || booking.userEmail || "",
+
     age: patient.age ?? booking.age ?? "",
+
     gender: patient.gender || booking.gender || "",
+
     type: patient.type || booking.patientType || "",
 
-    status: String(booking.status || "waiting").toLowerCase(),
-    paymentStatus: String(booking.paymentStatus || "unpaid").toLowerCase(),
+    status: String(
+      booking.status || "waiting"
+    ).toLowerCase(),
+
+    paymentStatus: String(
+      booking.paymentStatus || "unpaid"
+    ).toLowerCase(),
 
     paymentId: booking.paymentId || null,
+
     amount: booking.amount ?? null,
+
     currency: booking.currency || "INR",
 
     expectedTurnAt:
@@ -136,54 +201,88 @@ function normalizeBooking(booking) {
       booking.checkupTime ||
       null,
 
-    createdAt: booking.createdAt || booking.bookingDate || null,
+    // Preserve original booking creation time.
+    createdAt:
+      booking.createdAt ||
+      booking.bookingDate ||
+      null,
+
     updatedAt: booking.updatedAt || null,
 
     date: dateKey(
       booking.date ||
-        booking.bookingDate ||
-        booking.createdAt ||
-        booking.expectedTurnAt
+      booking.bookingDate ||
+      booking.createdAt ||
+      booking.expectedTurnAt
     ),
 
     slot: slotLabel,
+
     slotValue: slotLabel,
+
     slotOpen: slotObject.open || "",
+
     slotClose: slotObject.close || "",
-    checkupStartTime: slotObject.checkupStartTime || "",
+
+    checkupStartTime:
+      slotObject.checkupStartTime || "",
 
     duration: booking.duration ?? null,
-    serviceName: booking.serviceName || "Consultation",
+
+    serviceName:
+      booking.serviceName || "Consultation",
+
     priority: String(
       booking.priority ||
-        booking.bookingPriority ||
-        booking.urgency ||
-        "normal"
+      booking.bookingPriority ||
+      booking.urgency ||
+      "normal"
     ).toLowerCase(),
 
     isEmergency:
       booking.isEmergency === true ||
-      String(booking.priority || "").toLowerCase().includes("emergency"),
+      String(booking.priority || "")
+        .toLowerCase()
+        .includes("emergency"),
+
     isElderly:
       booking.isElderly === true ||
-      String(booking.priority || "").toLowerCase().includes("elderly"),
+      String(booking.priority || "")
+        .toLowerCase()
+        .includes("elderly"),
 
-    clinicId: booking.clinicId ? String(booking.clinicId) : "",
+    clinicId: booking.clinicId
+      ? String(booking.clinicId)
+      : "",
+
     clinicName: booking.clinicName || "",
+
     address: booking.address || "",
 
-    doctorId: booking.doctorId ? String(booking.doctorId) : "",
+    // Preserve arrival time.
+    arrivalTime: booking.arrivalTime || "",
+
+    doctorId: booking.doctorId
+      ? String(booking.doctorId)
+      : "",
+
     doctorName: booking.doctorName || "",
-    staffId: booking.staffId ? String(booking.staffId) : "",
+
+    staffId: booking.staffId
+      ? String(booking.staffId)
+      : "",
+
     staffName: booking.staffName || "",
   };
 }
 
 function buildBookingQuery(userId, role) {
   const variants = idVariants(userId);
+
   if (!variants.length) return null;
 
-  const assignmentField = role === "doctor" ? "doctorId" : "staffId";
+  const assignmentField =
+    role === "doctor" ? "doctorId" : "staffId";
 
   return {
     $or: variants.map((id) => ({
@@ -193,12 +292,18 @@ function buildBookingQuery(userId, role) {
 }
 
 function isValidDate(date) {
-  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  if (
+    typeof date !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(date)
+  ) {
     return false;
   }
 
   const [year, month, day] = date.split("-").map(Number);
-  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  const parsed = new Date(
+    Date.UTC(year, month - 1, day)
+  );
 
   return (
     parsed.getUTCFullYear() === year &&
@@ -208,31 +313,50 @@ function isValidDate(date) {
 }
 
 function bookingDateQuery(date) {
-  const start = new Date(`${date}T00:00:00.000+05:30`);
-  const end = new Date(`${date}T00:00:00.000+05:30`);
+  const start = new Date(
+    `${date}T00:00:00.000+05:30`
+  );
+
+  const end = new Date(start);
   end.setUTCDate(end.getUTCDate() + 1);
 
   return {
     $or: [
       { date },
       { bookingDate: date },
-      { createdAt: { $gte: start, $lt: end } },
-      { bookingDate: { $gte: start, $lt: end } },
+      {
+        createdAt: {
+          $gte: start,
+          $lt: end,
+        },
+      },
+      {
+        bookingDate: {
+          $gte: start,
+          $lt: end,
+        },
+      },
     ],
   };
 }
 
-async function getAuthorizedContext(request, method) {
+async function getAuthorizedContext() {
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.id) {
-    return { response: json({ error: "Unauthorized" }, 401) };
+    return {
+      response: json({ error: "Unauthorized" }, 401),
+    };
   }
 
-  const role = String(session.user.role || "").trim().toLowerCase();
+  const role = String(
+    session.user.role || ""
+  ).trim().toLowerCase();
 
   if (!VALID_ROLES.includes(role)) {
-    return { response: json({ error: "Forbidden" }, 403) };
+    return {
+      response: json({ error: "Forbidden" }, 403),
+    };
   }
 
   const client = await clientPromise;
@@ -247,52 +371,104 @@ async function getAuthorizedContext(request, method) {
   };
 }
 
+// ======================================================
+// GET: Fetch assigned customers
+// ======================================================
+
 export async function GET(request) {
   try {
-    const context = await getAuthorizedContext(request, "GET");
+    const context = await getAuthorizedContext();
+
     if (context.response) return context.response;
 
     const { session, role, userId, db } = context;
+
     const { searchParams } = new URL(request.url);
 
-    const requestedRole = String(searchParams.get("role") || "")
-      .trim()
-      .toLowerCase();
+    const requestedRole = String(
+      searchParams.get("role") || ""
+    ).trim().toLowerCase();
 
-    const date = String(searchParams.get("date") || "").trim();
-    const requestedSlot = String(searchParams.get("slot") || "").trim();
+    const date = String(
+      searchParams.get("date") || ""
+    ).trim();
+
+    const requestedSlot = String(
+      searchParams.get("slot") || ""
+    ).trim();
 
     if (!VALID_ROLES.includes(requestedRole)) {
-      return json({ error: "Invalid team role" }, 400);
+      return json(
+        { error: "Invalid team role" },
+        400
+      );
     }
 
     if (!isValidDate(date)) {
-      return json({ error: "A valid date is required (YYYY-MM-DD)" }, 400);
+      return json(
+        { error: "A valid date is required (YYYY-MM-DD)" },
+        400
+      );
     }
 
-    if (String(session.user.role || "").trim().toLowerCase() !== requestedRole) {
+    if (
+      String(session.user.role || "")
+        .trim()
+        .toLowerCase() !== requestedRole
+    ) {
       return json({ error: "Forbidden" }, 403);
     }
 
-    const bookingQuery = buildBookingQuery(userId, requestedRole);
+    const bookingQuery = buildBookingQuery(
+      userId,
+      requestedRole
+    );
 
     if (!bookingQuery) {
-      return json({ error: "Invalid team member ID" }, 400);
+      return json(
+        { error: "Invalid team member ID" },
+        400
+      );
     }
 
     const rawBookings = await db
       .collection("bookings")
       .find(bookingQuery)
-      .sort({ sequence: 1, createdAt: 1 })
+      .sort({
+        sequence: 1,
+        createdAt: 1,
+      })
       .toArray();
 
-    const customers = rawBookings
-      .map(normalizeBooking)
-      .filter((booking) => {
-        if (booking.date !== date) return false;
-        if (requestedSlot && booking.slot !== requestedSlot) return false;
+    const filteredBookings = rawBookings.filter(
+      (booking) => {
+        const bookingDate = dateKey(
+          booking.date ||
+          booking.bookingDate ||
+          booking.createdAt ||
+          booking.expectedTurnAt
+        );
+
+        if (bookingDate !== date) return false;
+
+        if (requestedSlot) {
+          const slot = normalizeSlot(
+            booking.slotTime || booking.slot
+          );
+
+          if (slot !== requestedSlot) return false;
+        }
+
         return true;
-      });
+      }
+    );
+
+    // IMPORTANT: normalizeBooking is async.
+    const customers = await Promise.all(
+      filteredBookings.map((booking) =>
+        normalizeBooking(db, booking)
+      )
+    );
 
     return json({
       customers,
@@ -301,19 +477,26 @@ export async function GET(request) {
       slot: requestedSlot,
     });
   } catch (error) {
-    console.error("GET /api/team/customer:", error);
-    return json({ error: "Failed to load slot customers" }, 500);
+    console.error(
+      "GET /api/team/customer:",
+      error
+    );
+
+    return json(
+      { error: "Failed to load slot customers" },
+      500
+    );
   }
 }
 
-/**
- * POST /api/team/customer
- * Accepts manual patient bookings from Doctor / Staff dashboard.
- */
+// ======================================================
+// POST: Create manual patient booking
+// ======================================================
 
 export async function POST(request) {
   try {
-    const context = await getAuthorizedContext(request, "POST");
+    const context = await getAuthorizedContext();
+
     if (context.response) return context.response;
 
     const { session, role, userId, db } = context;
@@ -323,21 +506,29 @@ export async function POST(request) {
     try {
       body = await request.json();
     } catch {
-      return json({ error: "Invalid JSON body" }, 400);
+      return json(
+        { error: "Invalid JSON body" },
+        400
+      );
     }
 
-    // 1. Normalize patient details
     const patient =
       body.patient && typeof body.patient === "object"
         ? body.patient
         : {};
 
     const patientName = String(
-      patient.name || body.patientName || body.name || ""
+      patient.name ||
+      body.patientName ||
+      body.name ||
+      ""
     ).trim();
 
     const phone = String(
-      body.phone || body.patientPhone || patient.phone || ""
+      body.phone ||
+      body.patientPhone ||
+      patient.phone ||
+      ""
     ).trim();
 
     const gender = String(
@@ -362,11 +553,16 @@ export async function POST(request) {
     ).toLowerCase();
 
     const serviceName = String(
-      body.serviceName || body.service || "Consultation"
+      body.serviceName ||
+      body.service ||
+      "Consultation"
     ).trim();
 
     if (!patientName) {
-      return json({ error: "Patient name is required" }, 400);
+      return json(
+        { error: "Patient name is required" },
+        400
+      );
     }
 
     if (!isValidDate(date)) {
@@ -380,15 +576,21 @@ export async function POST(request) {
       age !== null &&
       (!Number.isInteger(age) || age < 0 || age > 130)
     ) {
-      return json({ error: "Invalid patient age" }, 400);
+      return json(
+        { error: "Invalid patient age" },
+        400
+      );
     }
 
-    if (!["normal", "elderly", "emergency"].includes(priority)) {
-      return json({ error: "Invalid booking priority" }, 400);
+    if (
+      !["normal", "elderly", "emergency"].includes(priority)
+    ) {
+      return json(
+        { error: "Invalid booking priority" },
+        400
+      );
     }
 
-    // 2. Normalize session information.
-    // Keep the original object for the MongoDB slot field.
     const rawSlot =
       body.slot && typeof body.slot === "object"
         ? body.slot
@@ -408,17 +610,19 @@ export async function POST(request) {
       close: String(rawSlot.close || ""),
       checkupStartTime: String(
         rawSlot.checkupStartTime ||
-          rawSlot.checkupStart ||
-          ""
+        rawSlot.checkupStart ||
+        ""
       ),
     };
 
     const time = String(
       body.time ||
-        slotDetails.checkupStartTime ||
-        slotDetails.open ||
-        (typeof body.slot === "string" ? body.slot : "") ||
-        ""
+      slotDetails.checkupStartTime ||
+      slotDetails.open ||
+      (typeof body.slot === "string"
+        ? body.slot
+        : "") ||
+      ""
     ).trim();
 
     if (!time) {
@@ -428,7 +632,6 @@ export async function POST(request) {
       );
     }
 
-    // 3. Get the authenticated user's profile.
     const userFilter = validId(userId)
       ? { _id: new ObjectId(userId) }
       : { id: userId };
@@ -449,14 +652,14 @@ export async function POST(request) {
         ? String(userId)
         : String(
             userProfile.doctorId ||
-              userProfile.assignedDoctorId ||
-              ""
+            userProfile.assignedDoctorId ||
+            ""
           );
 
     const doctorName = String(
       userProfile.name ||
-        userProfile.fullName ||
-        ""
+      userProfile.fullName ||
+      ""
     );
 
     const clinicId = String(
@@ -465,8 +668,8 @@ export async function POST(request) {
 
     const clinicName = String(
       userProfile.businessName ||
-        userProfile.clinicName ||
-        ""
+      userProfile.clinicName ||
+      ""
     );
 
     if (!doctorId || !clinicId) {
@@ -481,7 +684,6 @@ export async function POST(request) {
 
     const doctorVariants = idVariants(doctorId);
 
-    // 4. Count bookings for this doctor, date, and session.
     const countFilter = {
       doctorId: { $in: doctorVariants },
       ...bookingDateQuery(date),
@@ -492,26 +694,30 @@ export async function POST(request) {
       .find(countFilter)
       .toArray();
 
-    const slotBookings = existingBookings.filter((booking) => {
-      const existingSlot = normalizeSlot(
-        booking.slotTime || booking.slot
-      );
+    const slotBookings = existingBookings.filter(
+      (booking) => {
+        const existingSlot = normalizeSlot(
+          booking.slotTime || booking.slot
+        );
 
-      return existingSlot === normalizedSlot;
-    });
+        return existingSlot === normalizedSlot;
+      }
+    );
 
     const sequence = slotBookings.length + 1;
+
     const token = `A${String(sequence).padStart(3, "0")}`;
 
-    // 5. Resolve the doctor's configured duration.
     const duration = Math.max(
       1,
       Number(userProfile.duration) || 20
     );
 
-    // 6. Calculate an estimated turn time in Asia/Kolkata.
-    // Existing bookings are used to determine this session's sequence.
-    function getExpectedTurnAt(dateValue, timeValue, offsetMinutes) {
+    function getExpectedTurnAt(
+      dateValue,
+      timeValue,
+      offsetMinutes
+    ) {
       const match = String(timeValue).match(
         /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i
       );
@@ -520,6 +726,7 @@ export async function POST(request) {
 
       let hours = Number(match[1]);
       const minutes = Number(match[2]);
+
       const meridiem = match[3].toUpperCase();
 
       if (
@@ -562,29 +769,32 @@ export async function POST(request) {
 
     const now = new Date();
 
-    // 7. Create the new booking in the target MongoDB format.
     const newBooking = {
       bookingReference: crypto.randomUUID(),
 
       token,
       sequence,
 
-      // Keep ID representation consistent with the existing
-      // customer API and database schema.
       userId: String(userId),
+
       userEmail: String(
-        session?.user?.email || userProfile.email || ""
+        session?.user?.email ||
+        userProfile.email ||
+        ""
       ),
 
       clinicId,
       clinicName,
+
       address: String(userProfile.address || ""),
 
       doctorId,
       doctorName,
+
       duration,
 
       serviceName,
+
       date,
       time,
 
@@ -599,10 +809,9 @@ export async function POST(request) {
       },
 
       priority,
+
       status: "waiting",
 
-      // Staff-created bookings are unpaid unless your actual
-      // payment workflow confirms payment.
       paymentStatus: "unpaid",
 
       ...(expectedTurnAt
@@ -630,16 +839,25 @@ export async function POST(request) {
       _id: insertResult.insertedId,
     };
 
+    // IMPORTANT: await async normalization.
+    const customer = await normalizeBooking(
+      db,
+      createdBooking
+    );
+
     return json(
       {
         success: true,
         message: "Patient booked successfully",
-        customer: normalizeBooking(createdBooking),
+        customer,
       },
       201
     );
   } catch (error) {
-    console.error("POST /api/team/customer:", error);
+    console.error(
+      "POST /api/team/customer:",
+      error
+    );
 
     return json(
       { error: "Failed to book patient" },
@@ -648,47 +866,51 @@ export async function POST(request) {
   }
 }
 
+// ======================================================
+// PATCH: Start, complete or cancel booking
+// ======================================================
 
-/**
- * PATCH body parameters accepts both formats:
- * Format 1 (Explicit Action):
- * {
- *   "role": "doctor",
- *   "bookingId": "<MongoDB booking _id>",
- *   "action": "start" | "complete" | "cancel",
- *   "date": "YYYY-MM-DD",
- *   "slot": "09:00 AM-01:00 PM"
- * }
- * 
- * Format 2 (Status Target):
- * {
- *   "bookingId": "<MongoDB booking _id>",
- *   "status": "serving" | "completed" | "cancelled",
- *   "role": "doctor",
- *   "date": "YYYY-MM-DD"
- * }
- */
 export async function PATCH(request) {
   let mongoSession;
 
   try {
-    const context = await getAuthorizedContext(request, "PATCH");
+    const context = await getAuthorizedContext();
+
     if (context.response) return context.response;
 
-    const { session, role, userId, client, db } = context;
+    const {
+      session,
+      role,
+      userId,
+      client,
+      db,
+    } = context;
 
     let body;
+
     try {
       body = await request.json();
     } catch {
-      return json({ error: "Invalid JSON body" }, 400);
+      return json(
+        { error: "Invalid JSON body" },
+        400
+      );
     }
 
-    const requestedRole = String(body.role || role).trim().toLowerCase();
-    const bookingId = String(body.bookingId || body.customerId || "").trim();
-    
-    // Support mapping from `status` field directly to internal `action`
-    let action = String(body.action || "").trim().toLowerCase();
+    const requestedRole = String(
+      body.role || role
+    ).trim().toLowerCase();
+
+    const bookingId = String(
+      body.bookingId ||
+      body.customerId ||
+      ""
+    ).trim();
+
+    let action = String(
+      body.action || ""
+    ).trim().toLowerCase();
+
     if (!action && body.status) {
       const statusMap = {
         serving: "start",
@@ -697,80 +919,149 @@ export async function PATCH(request) {
         cancelled: "cancel",
         canceled: "cancel",
       };
-      action = statusMap[String(body.status).toLowerCase()] || "";
+
+      action =
+        statusMap[String(body.status).toLowerCase()] ||
+        "";
     }
 
-    const date = String(body.date || "").trim();
-    let requestedSlot = String(body.slot || "").trim();
+    const date = String(
+      body.date || ""
+    ).trim();
 
-    if (!VALID_ROLES.includes(requestedRole) || requestedRole !== role) {
-      return json({ error: "Forbidden: role mismatch" }, 403);
+    let requestedSlot = String(
+      body.slot || ""
+    ).trim();
+
+    if (
+      !VALID_ROLES.includes(requestedRole) ||
+      requestedRole !== role
+    ) {
+      return json(
+        { error: "Forbidden: role mismatch" },
+        403
+      );
     }
 
     if (!validId(bookingId)) {
-      return json({ error: "A valid bookingId is required" }, 400);
+      return json(
+        { error: "A valid bookingId is required" },
+        400
+      );
     }
 
-    if (!["start", "complete", "cancel"].includes(action)) {
+    if (
+      !["start", "complete", "cancel"].includes(action)
+    ) {
       return json(
-        { error: 'Action must be "start", "complete", or "cancel"' },
+        {
+          error:
+            'Action must be "start", "complete", or "cancel"',
+        },
         400
       );
     }
 
     if (!isValidDate(date)) {
-      return json({ error: "A valid date is required (YYYY-MM-DD)" }, 400);
+      return json(
+        {
+          error: "A valid date is required (YYYY-MM-DD)",
+        },
+        400
+      );
     }
 
-    const assignmentField = role === "doctor" ? "doctorId" : "staffId";
+    const assignmentField =
+      role === "doctor" ? "doctorId" : "staffId";
+
     const assigneeVariants = idVariants(userId);
 
     if (!assigneeVariants.length) {
-      return json({ error: "Invalid team member ID" }, 400);
+      return json(
+        { error: "Invalid team member ID" },
+        400
+      );
     }
 
     const assignmentFilter = {
       _id: new ObjectId(bookingId),
-      [assignmentField]: { $in: assigneeVariants },
+      [assignmentField]: {
+        $in: assigneeVariants,
+      },
     };
 
     const bookings = db.collection("bookings");
-    const target = await bookings.findOne(assignmentFilter);
+
+    const target = await bookings.findOne(
+      assignmentFilter
+    );
 
     if (!target) {
-      return json({ error: "Booking not found or not assigned to you" }, 404);
+      return json(
+        {
+          error:
+            "Booking not found or not assigned to you",
+        },
+        404
+      );
     }
 
-    const normalizedTarget = normalizeBooking(target);
+    // Async normalization.
+    const normalizedTarget = await normalizeBooking(
+      db,
+      target
+    );
 
     if (normalizedTarget.date !== date) {
-      return json({ error: "Booking does not belong to this date" }, 409);
+      return json(
+        {
+          error: "Booking does not belong to this date",
+        },
+        409
+      );
     }
 
-    // Auto-populate slot if not provided in request body
     if (!requestedSlot) {
       requestedSlot = normalizedTarget.slot;
     }
 
-    const currentStatus = String(target.status || "waiting").toLowerCase();
+    const currentStatus = String(
+      target.status || "waiting"
+    ).toLowerCase();
 
-    if (action === "start" && currentStatus !== "waiting") {
+    if (
+      action === "start" &&
+      currentStatus !== "waiting"
+    ) {
       return json(
-        { error: `Cannot start a booking with status "${currentStatus}"` },
+        {
+          error: `Cannot start a booking with status "${currentStatus}"`,
+        },
         409
       );
     }
 
-    if (action === "complete" && currentStatus !== "serving") {
+    if (
+      action === "complete" &&
+      currentStatus !== "serving"
+    ) {
       return json(
-        { error: 'Only a patient with status "serving" can be completed' },
+        {
+          error:
+            'Only a patient with status "serving" can be completed',
+        },
         409
       );
     }
 
-    if (action === "cancel" && currentStatus === "completed") {
+    if (
+      action === "cancel" &&
+      currentStatus === "completed"
+    ) {
       return json(
-        { error: "Completed bookings cannot be cancelled" },
+        {
+          error: "Completed bookings cannot be cancelled",
+        },
         409
       );
     }
@@ -784,26 +1075,29 @@ export async function PATCH(request) {
 
     const now = new Date();
 
-    // Strategy 1: Attempt update inside a Session Transaction
     let updatedBooking = null;
     let conflict = null;
     let useTransaction = true;
 
     try {
       mongoSession = client.startSession();
+
       await mongoSession.withTransaction(async () => {
         conflict = null;
         updatedBooking = null;
 
-        const freshTarget = await bookings.findOne(assignmentFilter, {
-          session: mongoSession,
-        });
+        const freshTarget = await bookings.findOne(
+          assignmentFilter,
+          { session: mongoSession }
+        );
 
         if (!freshTarget) {
           conflict = {
             status: 404,
-            error: "Booking not found or not assigned to you",
+            error:
+              "Booking not found or not assigned to you",
           };
+
           return;
         }
 
@@ -815,51 +1109,100 @@ export async function PATCH(request) {
           if (freshStatus !== "waiting") {
             conflict = {
               status: 409,
-              error: `Booking is no longer waiting (current status: ${freshStatus})`,
+              error:
+                `Booking is no longer waiting (current status: ${freshStatus})`,
             };
+
             return;
           }
 
           const activeQuery = {
-            [assignmentField]: { $in: assigneeVariants },
-            status: { $in: ["serving", "in-progress"] },
+            [assignmentField]: {
+              $in: assigneeVariants,
+            },
+
+            status: {
+              $in: ["serving", "in-progress"],
+            },
+
             ...bookingDateQuery(date),
           };
 
           const activeBookings = await bookings
-            .find(activeQuery, { session: mongoSession })
+            .find(activeQuery, {
+              session: mongoSession,
+            })
             .toArray();
 
-          const otherActive = activeBookings.find((booking) => {
-            if (String(booking._id) === bookingId) return false;
+          const otherActive = activeBookings.find(
+            (booking) => {
+              if (
+                String(booking._id) === bookingId
+              ) {
+                return false;
+              }
 
-            const normalized = normalizeBooking(booking);
-            return (
-              normalized.date === date &&
-              (!requestedSlot || normalized.slot === requestedSlot)
-            );
-          });
+              const activeDate = dateKey(
+                booking.date ||
+                booking.bookingDate ||
+                booking.createdAt ||
+                booking.expectedTurnAt
+              );
+
+              const activeSlot = normalizeSlot(
+                booking.slotTime || booking.slot
+              );
+
+              return (
+                activeDate === date &&
+                (
+                  !requestedSlot ||
+                  activeSlot === requestedSlot
+                )
+              );
+            }
+          );
 
           if (otherActive) {
             conflict = {
               status: 409,
               error:
                 "Another patient is already being checked. Mark that patient Done first.",
-              activeBookingId: String(otherActive._id),
+              activeBookingId: String(
+                otherActive._id
+              ),
             };
+
             return;
           }
-        } else if (action === "complete" && freshStatus !== "serving") {
+        } else if (
+          action === "complete" &&
+          freshStatus !== "serving"
+        ) {
           conflict = {
             status: 409,
-            error: `Only a serving patient can be completed (current status: ${freshStatus})`,
+            error:
+              `Only a serving patient can be completed (current status: ${freshStatus})`,
           };
+
+          return;
+        } else if (
+          action === "cancel" &&
+          freshStatus === "completed"
+        ) {
+          conflict = {
+            status: 409,
+            error:
+              "Completed bookings cannot be cancelled",
+          };
+
           return;
         }
 
         const updateFields = {
           status: nextStatus,
           updatedAt: now,
+
           ...(action === "start"
             ? { checkupStartedAt: now }
             : action === "complete"
@@ -870,18 +1213,28 @@ export async function PATCH(request) {
         const result = await bookings.updateOne(
           {
             _id: freshTarget._id,
-            [assignmentField]: { $in: assigneeVariants },
+
+            [assignmentField]: {
+              $in: assigneeVariants,
+            },
+
             status: freshTarget.status ?? "waiting",
           },
-          { $set: updateFields },
-          { session: mongoSession }
+          {
+            $set: updateFields,
+          },
+          {
+            session: mongoSession,
+          }
         );
 
         if (result.modifiedCount !== 1) {
           conflict = {
             status: 409,
-            error: "Booking changed concurrently. Refresh and try again.",
+            error:
+              "Booking changed concurrently. Refresh and try again.",
           };
+
           return;
         }
 
@@ -892,7 +1245,8 @@ export async function PATCH(request) {
       });
     } catch (txError) {
       useTransaction = false;
-      // Fallback for standalone MongoDB deployments without replica set transactions
+
+      // Fallback for standalone MongoDB deployments.
       if (
         txError?.code === 20 ||
         /transaction numbers are only allowed|replica set|does not support transactions/i.test(
@@ -901,27 +1255,59 @@ export async function PATCH(request) {
       ) {
         if (action === "start") {
           const activeQuery = {
-            [assignmentField]: { $in: assigneeVariants },
-            status: { $in: ["serving", "in-progress"] },
+            [assignmentField]: {
+              $in: assigneeVariants,
+            },
+
+            status: {
+              $in: ["serving", "in-progress"],
+            },
+
             ...bookingDateQuery(date),
           };
 
-          const activeBookings = await bookings.find(activeQuery).toArray();
-          const otherActive = activeBookings.find((booking) => {
-            if (String(booking._id) === bookingId) return false;
-            const normalized = normalizeBooking(booking);
-            return (
-              normalized.date === date &&
-              (!requestedSlot || normalized.slot === requestedSlot)
-            );
-          });
+          const activeBookings = await bookings
+            .find(activeQuery)
+            .toArray();
+
+          const otherActive = activeBookings.find(
+            (booking) => {
+              if (
+                String(booking._id) === bookingId
+              ) {
+                return false;
+              }
+
+              const activeDate = dateKey(
+                booking.date ||
+                booking.bookingDate ||
+                booking.createdAt ||
+                booking.expectedTurnAt
+              );
+
+              const activeSlot = normalizeSlot(
+                booking.slotTime || booking.slot
+              );
+
+              return (
+                activeDate === date &&
+                (
+                  !requestedSlot ||
+                  activeSlot === requestedSlot
+                )
+              );
+            }
+          );
 
           if (otherActive) {
             return json(
               {
                 error:
                   "Another patient is already being checked. Mark that patient Done first.",
-                activeBookingId: String(otherActive._id),
+
+                activeBookingId: String(
+                  otherActive._id
+                ),
               },
               409
             );
@@ -931,6 +1317,7 @@ export async function PATCH(request) {
         const updateFields = {
           status: nextStatus,
           updatedAt: now,
+
           ...(action === "start"
             ? { checkupStartedAt: now }
             : action === "complete"
@@ -938,12 +1325,27 @@ export async function PATCH(request) {
             : { cancelledAt: now }),
         };
 
+        // Keep status validation in the fallback too.
+        const expectedStatus =
+          action === "start"
+            ? "waiting"
+            : action === "complete"
+            ? "serving"
+            : currentStatus;
+
         const result = await bookings.updateOne(
           {
             _id: new ObjectId(bookingId),
-            [assignmentField]: { $in: assigneeVariants },
+
+            [assignmentField]: {
+              $in: assigneeVariants,
+            },
+
+            status: expectedStatus,
           },
-          { $set: updateFields }
+          {
+            $set: updateFields,
+          }
         );
 
         if (result.modifiedCount === 1) {
@@ -960,8 +1362,12 @@ export async function PATCH(request) {
       return json(
         {
           error: conflict.error,
+
           ...(conflict.activeBookingId
-            ? { activeBookingId: conflict.activeBookingId }
+            ? {
+                activeBookingId:
+                  conflict.activeBookingId,
+              }
             : {}),
         },
         conflict.status
@@ -969,14 +1375,30 @@ export async function PATCH(request) {
     }
 
     if (!updatedBooking) {
-      return json({ error: "Could not update booking status" }, 409);
+      return json(
+        {
+          error:
+            "Could not update booking status",
+        },
+        409
+      );
     }
+
+    // IMPORTANT: await async normalization.
+    const customer = await normalizeBooking(
+      db,
+      updatedBooking
+    );
 
     return json({
       success: true,
+
       action,
+
       status: nextStatus,
-      customer: normalizeBooking(updatedBooking),
+
+      customer,
+
       message:
         action === "start"
           ? "Checkup started"
@@ -985,9 +1407,17 @@ export async function PATCH(request) {
           : "Booking cancelled",
     });
   } catch (error) {
-    console.error("PATCH /api/team/customer:", error);
+    console.error(
+      "PATCH /api/team/customer:",
+      error
+    );
 
-    return json({ error: "Failed to update patient checkup" }, 500);
+    return json(
+      {
+        error: "Failed to update patient checkup",
+      },
+      500
+    );
   } finally {
     if (mongoSession) {
       await mongoSession.endSession();

@@ -10,8 +10,7 @@ export const metadata = {
   description: "Manage customer bookings and your profile.",
 };
 
-export const instant = false;
-
+ 
 async function StaffDashboardContent() {
   const session = await getServerSession(authOptions);
 

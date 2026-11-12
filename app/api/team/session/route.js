@@ -114,6 +114,7 @@ export async function GET(request) {
   }
 }
 
+
 export async function POST(request) {
   try {
     const context = await getDoctorContext();
@@ -123,13 +124,20 @@ export async function POST(request) {
     }
 
     const body = await request.json();
+    const now = new Date();
 
     const role = String(body.role || "").toLowerCase();
-    const date = String(body.date || "");
+    const date = String(body.date || "").trim();
     const sessionId = String(body.sessionId || "").trim();
     const sessionLabel = String(body.sessionLabel || "").trim();
-    const action = String(body.action || "");
 
+    // Read slot times directly from request body
+    const slotOpen = String(body.slotOpen || "").trim();
+    const slotClose = String(body.slotClose || "").trim();
+
+    const action = String(body.action || "").trim();
+
+    // Validation
     if (role !== "doctor") {
       return json({ error: "Invalid role." }, 400);
     }
@@ -145,94 +153,169 @@ export async function POST(request) {
       );
     }
 
-    if (!["start-session", "close-session"].includes(action)) {
+    if (!slotOpen || !slotClose) {
+      return json({ error: "Slot times are required." }, 400);
+    }
+
+    if (
+      !["start-session", "cancel-session", "close-session"].includes(action)
+    ) {
       return json({ error: "Invalid session action." }, 400);
     }
 
     const db = await getDatabase();
-    const collection = db.collection(COLLECTION_NAME);
 
+    const sessionCollection = db.collection(COLLECTION_NAME);
+    const bookingCollection = db.collection("bookings");
+
+    // Match particular doctor's session
     const filter = {
       doctorId: context.userId,
       date,
       sessionId,
     };
 
-    const existing = await collection.findOne(filter);
+    // Match bookings belonging to this exact time slot
+    const bookingFilter = {
+      doctorId: context.userId,
+      date,
+      "slot.open": slotOpen,
+      "slot.close": slotClose,
+      status: "waiting",
+    };
 
+    const existing = await sessionCollection.findOne(filter);
+
+    // START SESSION
     if (action === "start-session") {
-      if (existing?.status === "closed") {
+      if (
+        existing?.cancel === true ||
+        existing?.status === "closed"
+      ) {
         return json(
-          { error: "This session has already been closed." },
+          { error: "This session has already been cancelled or closed." },
           409
         );
       }
 
-      const now = new Date();
+      const startedAt = existing?.startedAt || now;
 
-      // Expire the session 24 hours after it is first created.
-      const expiresAt = new Date(
-        now.getTime() + 24 * 60 * 60 * 1000
-      );
+      const expiresAt =
+        existing?.expiresAt ||
+        new Date(startedAt.getTime() + 24 * 60 * 60 * 1000);
 
-      await collection.updateOne(
+      await sessionCollection.updateOne(
         filter,
         {
           $setOnInsert: {
             ...filter,
             createdAt: now,
-            status: "active",
-            startedAt: now,
+            startedAt,
             expiresAt,
           },
           $set: {
             sessionLabel,
+            slotOpen,
+            slotClose,
+            status: "active",
+            cancel: false,
             updatedAt: now,
           },
         },
         { upsert: true }
       );
-    }
 
-    if (action === "close-session") {
-      if (!existing || existing.status !== "active") {
-        return json(
-          { error: "Only an active session can be closed." },
-          409
-        );
-      }
+      const bookingResult = await bookingCollection.updateMany(
+        bookingFilter,
+        {
+          $set: {
+            arrivalTime: startedAt,
+            updatedAt: now,
+          },
+        }
+      );
 
-      const now = new Date();
-
-      await collection.updateOne(filter, {
-        $set: {
-          status: "closed",
-          closedAt: now,
-          updatedAt: now,
-          sessionLabel,
-        },
+      return json({
+        success: true,
+        message: "Session started successfully.",
+        sessionId,
+        slotOpen,
+        slotClose,
+        bookingsUpdated: bookingResult.modifiedCount,
       });
     }
 
-    const saved = await collection.findOne(filter, {
+  // CANCEL SESSION OR CLOSE SESSION
+if (
+  action === "cancel-session" ||
+  action === "close-session"
+) {
+  await sessionCollection.updateOne(
+    filter,
+    {
+      $setOnInsert: {
+        ...filter,
+        createdAt: now,
+      },
+      $set: {
+        sessionLabel,
+        slotOpen,
+        slotClose,
+        status: "closed",
+        cancel: true,
+        closedAt: now,
+        updatedAt: now,
+      },
+    },
+    { upsert: true }
+  );
+
+  // Update only waiting bookings of this exact session
+  const bookingResult = await bookingCollection.updateMany(
+    {
+      doctorId: context.userId,
+      date,
+      "slot.open": slotOpen,
+      "slot.close": slotClose,
+      status: "waiting",
+    },
+    {
+      $set: {
+        status: "pending",
+        bydoctor: true,
+        updatedAt: now,
+      },
+    }
+  );
+
+  const saved = await sessionCollection.findOne(
+    filter,
+    {
       projection: {
         _id: 0,
         sessionId: 1,
         sessionLabel: 1,
+        slotOpen: 1,
+        slotClose: 1,
         status: 1,
+        cancel: 1,
         startedAt: 1,
         closedAt: 1,
-        expiresAt: 1,
       },
-    });
+    }
+  );
 
-    return json({
-      message:
-        action === "start-session"
-          ? "Session started."
-          : "Session closed.",
-      session: saved,
-    });
+  return json({
+    success: true,
+    message:
+      action === "cancel-session"
+        ? "Session cancelled successfully. Waiting bookings moved to pending."
+        : "Session closed successfully. Waiting bookings moved to pending.",
+    session: saved,
+    bookingsUpdated: bookingResult.modifiedCount,
+  });
+}
+
   } catch (error) {
     console.error("POST /api/team/session:", error);
 

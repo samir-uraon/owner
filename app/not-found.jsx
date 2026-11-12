@@ -1,118 +1,80 @@
-
-"use client";
-
-import Image from "next/image";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Home,
-  Search,
-  Compass,
-  AlertCircle,
-} from "lucide-react";
-
 export default function NotFound() {
-  const router = useRouter();
-
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-indigo-50 via-white to-violet-50 px-5 py-12">
-      {/* Background decoration */}
-      <div className="pointer-events-none absolute -left-32 -top-32 h-80 w-80 rounded-full bg-indigo-200/30 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-violet-200/30 blur-3xl" />
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#fafaff] px-6">
+      <style>{`
+        @keyframes float {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-12px); }
+        }
 
-      <div className="relative w-full max-w-2xl text-center">
-        {/* Logo */}
-        <Link
-          href="/"
-          className="mb-12 inline-flex items-center justify-center"
-        >
-          <Image
-            src="/logo.png"
-            alt="Zeriy"
-            width={150}
-            height={55}
-            priority
-            className="h-12 w-auto object-contain"
-          />
-        </Link>
+        @keyframes glow {
+          0%, 100% { opacity: 0.4; transform: scale(0.9); }
+          50% { opacity: 0.9; transform: scale(1.15); }
+        }
 
-        {/* 404 illustration */}
-        <div className="relative mx-auto mb-7 flex h-48 w-64 items-center justify-center sm:h-56 sm:w-80">
-          <div className="absolute inset-0 rounded-full bg-indigo-100/60 blur-2xl" />
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
 
-          <div className="relative flex items-center justify-center gap-2">
-            <span className="text-[100px] font-black leading-none tracking-tighter text-indigo-200 sm:text-[130px]">
-              4
-            </span>
+        @keyframes buttonPulse {
+          0%, 100% { box-shadow: 0 8px 20px rgba(124, 58, 237, 0.15); }
+          50% { box-shadow: 0 8px 30px rgba(124, 58, 237, 0.3); }
+        }
 
-            <div className="relative flex h-24 w-24 items-center justify-center rounded-[30px] border border-indigo-100 bg-white shadow-xl shadow-indigo-100/70 sm:h-28 sm:w-28">
-              <Compass
-                size={65}
-                strokeWidth={1.5}
-                className="text-indigo-600"
-              />
-              <span className="absolute -right-2 -top-2 flex h-8 w-8 items-center justify-center rounded-full bg-violet-600 text-white shadow-lg">
-                <AlertCircle size={17} />
-              </span>
-            </div>
+        .error-number { animation: float 4s ease-in-out infinite; }
+        .error-glow { animation: glow 4s ease-in-out infinite; }
+        .fade-up { animation: fadeUp 0.8s ease-out both; }
+        .fade-up-1 { animation-delay: 0.15s; }
+        .fade-up-2 { animation-delay: 0.3s; }
+        .fade-up-3 { animation-delay: 0.45s; }
+        .home-button { animation: buttonPulse 3s ease-in-out infinite; }
 
-            <span className="text-[100px] font-black leading-none tracking-tighter text-indigo-200 sm:text-[130px]">
-              4
-            </span>
-          </div>
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation: none !important;
+            transition: none !important;
+          }
+        }
+      `}</style>
+
+      {/* Background decorations */}
+      <div className="pointer-events-none absolute -left-32 -top-32 h-80 w-80 rounded-full bg-violet-200/30 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-32 -right-32 h-80 w-80 rounded-full bg-indigo-200/30 blur-3xl" />
+
+      <div className="relative w-full max-w-md text-center">
+        {/* 404 */}
+        <div className="relative mx-auto mb-6 flex h-40 w-64 items-center justify-center">
+          <div className="error-glow absolute h-36 w-36 rounded-full bg-violet-300/40 blur-3xl" />
+
+          <span className="error-number relative text-8xl font-black tracking-tighter text-violet-600">
+            404
+          </span>
         </div>
 
-        {/* Message */}
-        <div className="mb-8">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-white px-4 py-2 text-xs font-bold uppercase tracking-[0.15em] text-indigo-600 shadow-sm">
-            <span className="h-2 w-2 rounded-full bg-indigo-500" />
-            Error 404
-          </div>
+        <p className="fade-up mb-3 text-xs font-bold uppercase tracking-[0.25em] text-violet-600">
+          Error 404
+        </p>
 
-          <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 sm:text-5xl">
-            Oops! Page not found
-          </h1>
+        <h1 className="fade-up fade-up-1 text-3xl font-bold tracking-tight text-gray-900">
+          Lost your way?
+        </h1>
 
-          <p className="mx-auto mt-4 max-w-md text-sm leading-7 text-gray-500 sm:text-base">
-            The page you're looking for may have been moved, deleted, or
-            doesn't exist. Let's get you back on track.
-          </p>
-        </div>
+        <p className="fade-up fade-up-2 mx-auto mt-3 max-w-sm text-sm leading-6 text-gray-500">
+          The page you're looking for doesn't exist or may have been moved.
+          Let's get you back on track.
+        </p>
 
-        {/* Actions */}
-        <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Link
+        <div className="fade-up fade-up-3 mt-8">
+          <a
             href="/"
-            className="group inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-7 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-200 transition-all duration-200 hover:-translate-y-0.5 hover:bg-indigo-700 hover:shadow-xl active:scale-[0.98] sm:w-auto"
+            className="home-button inline-flex items-center gap-2 rounded-xl bg-violet-600 px-7 py-3 text-sm font-semibold text-white transition-all duration-300 hover:-translate-y-1 hover:bg-violet-700 hover:shadow-xl"
           >
-            <Home size={18} />
-            Back to Home
-            <ArrowRight
-              size={16}
-              className="transition-transform group-hover:translate-x-1"
-            />
-          </Link>
-
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-7 py-3 text-sm font-semibold text-gray-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 active:scale-[0.98] sm:w-auto"
-          >
-            <ArrowLeft size={18} />
-            Go Back
-          </button>
-        </div>
-
-        {/* Footer */}
-        <div className="mt-16 border-t border-indigo-100 pt-6">
-          <p className="text-xs font-medium text-gray-400">
-            Made Simpler & Much Faster
-          </p>
-          <p className="mt-2 text-xs text-gray-400">
-            © {new Date().getFullYear()} Zeriy. All rights reserved.
-          </p>
+            <span>Go to Homepage</span>
+            <span className="inline-block transition-transform duration-300 group-hover:translate-x-1">
+              →
+            </span>
+          </a>
         </div>
       </div>
     </main>

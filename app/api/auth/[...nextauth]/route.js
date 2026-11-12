@@ -1,4 +1,4 @@
- 
+
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
@@ -19,6 +19,51 @@ function normalizeEmail(value) {
 
 function normalizeRole(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+// ==========================================
+// WEB PUSH STATUS FROM MONGODB
+// ==========================================
+ 
+
+async function getWebPushEnabled(userId, role) {
+  try {
+    if (!userId || !ObjectId.isValid(String(userId))) {
+      return false;
+    }
+
+    const collectionMap = {
+      owner: "owners",
+      doctor: "team",
+      staff: "team",
+    };
+
+    const collectionName = collectionMap[normalizeRole(role)];
+
+    if (!collectionName) {
+      return false;
+    }
+
+    const client = await clientPromise;
+    const db = client.db(process.env.MONGODB);
+
+    const user = await db.collection(collectionName).findOne(
+      {
+        _id: new ObjectId(String(userId)),
+      },
+      {
+        projection: {
+          webPushEnabled: 1,
+        },
+      }
+    );
+
+    return user?.webPushEnabled === true;
+
+  } catch (error) {
+    console.error("Get Web Push status error:", error);
+    return false;
+  }
 }
 
 function getTeamConditions(identifier) {
@@ -131,13 +176,18 @@ export const authOptions = {
         try {
           const role = normalizeRole(credentials?.role);
 
-          if (!LOGIN_ROLES.includes(role)) return null;
+          if (role !== "admin" && !LOGIN_ROLES.includes(role)) {
+            return null;
+          }
 
           const client = await clientPromise;
           const db = client.db(process.env.MONGODB);
           const now = new Date();
 
+          // ==========================================
           // OWNER LOGIN AFTER OTP VERIFICATION
+          // ==========================================
+
           if (credentials?.verificationToken) {
             if (role !== "owner") return null;
 
@@ -185,9 +235,56 @@ export const authOptions = {
             return null;
           }
 
-          // =====================================
+          // ==========================================
+          // SUPER ADMIN LOGIN
+          // ==========================================
+
+          if (role === "admin") {
+            const email = normalizeEmail(identifier);
+
+            const adminEmails = (process.env.ADMIN_EMAILS || "")
+              .split(",")
+              .map((item) => item.trim().toLowerCase())
+              .filter(Boolean);
+
+            const passwordHash = process.env.ADMIN_PASSWORD;
+
+            if (
+              !email ||
+              !email.includes("@") ||
+              !adminEmails.includes(email) ||
+              !passwordHash
+            ) {
+              return null;
+            }
+
+            let validPassword = false;
+
+            if (/^\$2[aby]\$\d{2}\$/.test(passwordHash)) {
+              validPassword = await bcrypt.compare(
+                password,
+                passwordHash
+              );
+            } else {
+              validPassword = password === passwordHash;
+            }
+
+            if (!validPassword) return null;
+
+            return {
+              id: `admin-${email}`,
+              name: "Zeriy Super Admin",
+              email,
+              role: "admin",
+              phone: "",
+              isConfigured: true,
+            };
+          }
+
+          // ==========================================
           // OWNER LOGIN
-          // =====================================
+          // ==========================================
+
           if (role === "owner") {
             const conditions = identifier.includes("@")
               ? [{ email: normalizeEmail(identifier) }]
@@ -209,15 +306,15 @@ export const authOptions = {
 
             if (!validPassword) return null;
 
-            // Only verified owners can create a session.
             if (owner.isVerified !== true) return null;
 
             return toOwnerUser(owner);
           }
 
-          // =====================================
+          // ==========================================
           // STAFF AND DOCTOR LOGIN
-          // =====================================
+          // ==========================================
+
           const conditions = getTeamConditions(identifier);
 
           if (!conditions.length) return null;
@@ -270,12 +367,19 @@ export const authOptions = {
     }),
   ],
 
+  // ==========================================
+  // SESSION CONFIGURATION
+  // ==========================================
+
   session: {
     strategy: "jwt",
   },
 
   callbacks: {
+    // ==========================================
     // GOOGLE LOGIN
+    // ==========================================
+
     async signIn({ user, account }) {
       if (account?.provider !== "google") return true;
       if (!user.email) return false;
@@ -312,6 +416,7 @@ export const authOptions = {
           if (!teamUser) return false;
 
           Object.assign(user, teamUser);
+
           return true;
         }
 
@@ -381,6 +486,7 @@ export const authOptions = {
         if (!ownerUser) return false;
 
         Object.assign(user, ownerUser);
+
         return true;
 
       } catch (error) {
@@ -389,31 +495,41 @@ export const authOptions = {
       }
     },
 
-    // JWT
-    async jwt({ token, user, trigger, session }) {
-      if (user) {
-        token.id = user.id || user._id?.toString() || "";
-        token.name = user.name || "";
-        token.email = normalizeEmail(user.email);
-        token.role = normalizeRole(user.role);
-        token.phone = user.phone || user.mobile || "";
-        token.isConfigured = user.isConfigured ?? false;
-      }
+    // ==========================================
+    // JWT CALLBACK
+    // ==========================================
 
-      if (trigger === "update" && session?.user) {
-        if (typeof session.user.name === "string") {
-          token.name = session.user.name;
-        }
+async jwt({ token, user, trigger }) {
+  // Initial login
+  if (user) {
+    token.id = user.id || user._id?.toString() || "";
+    token.name = user.name || "";
+    token.email = normalizeEmail(user.email);
+    token.role = normalizeRole(user.role);
+    token.phone = user.phone || user.mobile || "";
+    token.isConfigured = user.isConfigured ?? false;
 
-        if (typeof session.user.phone === "string") {
-          token.phone = session.user.phone;
-        }
-      }
+    token.webPushEnabled = await getWebPushEnabled(
+      token.id,
+      token.role
+    );
+  }
 
-      return token;
-    },
+  // Refresh notification status
+  if (trigger === "update") {
+    token.webPushEnabled = await getWebPushEnabled(
+      token.id,
+      token.role
+    );
+  }
 
-    // SESSION
+  return token;
+},
+
+    // ==========================================
+    // SESSION CALLBACK
+    // ==========================================
+
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id || "";
@@ -422,14 +538,23 @@ export const authOptions = {
         session.user.role = token.role || "";
         session.user.phone = token.phone || "";
         session.user.isConfigured = token.isConfigured ?? false;
+
+        // Web Push status.
+        session.user.webPushEnabled =
+          token.webPushEnabled === true;
       }
 
       return session;
     },
 
+    // ==========================================
     // REDIRECT
+    // ==========================================
+
     async redirect({ url, baseUrl }) {
-      if (url.startsWith("/")) return `${baseUrl}${url}`;
+      if (url.startsWith("/")) {
+        return `${baseUrl}${url}`;
+      }
 
       try {
         if (new URL(url).origin === new URL(baseUrl).origin) {

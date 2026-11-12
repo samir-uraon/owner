@@ -305,7 +305,7 @@ function PolicyPage({ title, kind, warning, intro, sections }) {
           />
 
           <p className="text-xs leading-6 text-slate-500">
-            © {new Date().getFullYear()} ZERIY. All rights reserved.
+            © 2026 ZERIY. All rights reserved.
           </p>
 
           <p className="mt-1 text-xs text-slate-400">

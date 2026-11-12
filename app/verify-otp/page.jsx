@@ -150,28 +150,28 @@ const handleVerify = async (event) => {
     }
 
     // Step 2: Get password saved during registration
-    const password = sessionStorage.getItem("password");
+    const data2 = sessionStorage.getItem("zeriy_registration");
 
-    if (!password) {
+    if (!data2) {
       toast.error("Email verified. Please log in to continue.");
-      router.replace("/owner/login");
+      router.replace("/sigin");
       return;
     }
-
+ const password=data2.password
     // Step 3: Direct login using NextAuth
     const result = await signIn("credentials", {
       identifier: email,
-      password,
+  password,
       role: "owner",
       redirect: false,
     });
 
     // Remove stored password
-    sessionStorage.removeItem("password");
+    sessionStorage.removeItem("zeriy_registration");
 
     if (!result || result.error) {
       toast.error("Email verified. Please log in manually.");
-      router.replace("/owner/login");
+      router.replace("/sigin");
       return;
     }
 

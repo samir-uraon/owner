@@ -263,6 +263,8 @@ function cleanMember(body, category) {
       )
     );
 
+    member.emergencyBookingCharge =50
+
     member.schedule = cleanSchedule(
       body.schedule ??
         memberData.schedule ??

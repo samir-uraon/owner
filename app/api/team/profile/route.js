@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { ObjectId } from "mongodb";
@@ -48,6 +49,19 @@ const BUSINESS_ID_FIELDS = [
   "businessId",
 ];
 
+// Bookings that must never be reopened by schedule/holiday changes.
+const PROTECTED_BOOKING_STATUSES = [
+  "completed",
+  "cancelled",
+  "skipped",
+  "refunded",
+  "failed",
+  "rejected",
+  "serving",
+  "in-progress",
+  "your-turn",
+];
+
 function json(data, status = 200) {
   return NextResponse.json(data, {
     status,
@@ -82,8 +96,7 @@ function isObjectId(value) {
 }
 
 /**
- * Returns today's date in the Asia/Kolkata timezone.
- * Format: YYYY-MM-DD
+ * Returns today's date in Asia/Kolkata.
  */
 function getIndiaDateString(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -102,8 +115,6 @@ function getIndiaDateString(date = new Date()) {
 
 /**
  * Validates multiple holiday dates.
- * Accepted format: YYYY-MM-DD
- * Maximum: 365 unique dates
  */
 function normalizeHolidayDates(dates) {
   if (!Array.isArray(dates)) {
@@ -147,7 +158,7 @@ function normalizeHolidayDates(dates) {
 }
 
 /**
- * Returns only today and future holiday dates.
+ * Returns today and future holiday dates.
  */
 function getActiveHolidayDates(dates) {
   const today = getIndiaDateString();
@@ -167,7 +178,9 @@ function getActiveHolidayDates(dates) {
  */
 async function getTeamMember(team, sessionUser) {
   const role = normalizeRole(sessionUser.role);
-  const id = String(sessionUser.id || sessionUser._id || "").trim();
+  const id = String(
+    sessionUser.id || sessionUser._id || ""
+  ).trim();
 
   if (id) {
     const identityConditions = [];
@@ -189,7 +202,9 @@ async function getTeamMember(team, sessionUser) {
     });
 
     if (member) {
-      return normalizeRole(member.role) === role ? member : null;
+      return normalizeRole(member.role) === role
+        ? member
+        : null;
     }
   }
 
@@ -226,7 +241,7 @@ async function getTeamMember(team, sessionUser) {
 }
 
 /**
- * Resolves the business name from the correct collection.
+ * Resolves the business name.
  */
 async function getBusinessName(db, member) {
   const category = String(member.category || "")
@@ -234,15 +249,22 @@ async function getBusinessName(db, member) {
     .toLowerCase();
 
   const config = CATEGORY_CONFIG[category];
+
   if (!config) return "";
 
   const businessId =
     config.idFields
       .map((field) => member[field])
-      .find((value) => value != null && String(value).trim()) ??
+      .find(
+        (value) =>
+          value != null && String(value).trim()
+      ) ??
     BUSINESS_ID_FIELDS
       .map((field) => member[field])
-      .find((value) => value != null && String(value).trim());
+      .find(
+        (value) =>
+          value != null && String(value).trim()
+      );
 
   if (businessId == null) return "";
 
@@ -296,7 +318,7 @@ async function getBusinessName(db, member) {
 }
 
 /**
- * Converts the MongoDB team document to the public profile representation.
+ * Converts MongoDB team document to public profile.
  */
 function serializeProfile(member, businessName = "") {
   return {
@@ -307,7 +329,9 @@ function serializeProfile(member, businessName = "") {
     role: normalizeRole(member.role),
     category: member.category || "",
 
-    clinicId: member.clinicId ? String(member.clinicId) : "",
+    clinicId: member.clinicId
+      ? String(member.clinicId)
+      : "",
 
     businessName,
 
@@ -321,27 +345,380 @@ function serializeProfile(member, businessName = "") {
     experience: member.experience ?? null,
     specialization: member.specialization || "",
 
-    fee: member.fee ?? member.checkupFee ?? member.charge ?? "",
+    fee:
+      member.fee ??
+      member.checkupFee ??
+      member.charge ??
+      "",
 
-    duration: member.duration ?? member.checkupDuration ?? null,
+    duration:
+      member.duration ??
+      member.checkupDuration ??
+      null,
 
-    services: Array.isArray(member.services) ? member.services : [],
+    services: Array.isArray(member.services)
+      ? member.services
+      : [],
 
     schedule: member.schedule || {},
 
-    holidayDates: getActiveHolidayDates(member.holidayDates),
+    holidayDates: getActiveHolidayDates(
+      member.holidayDates
+    ),
   };
 }
 
+/* =========================================================
+   DOCTOR + STAFF SCHEDULE AND BOOKING MATCHING
+========================================================= */
+
+function normalizeSlotTime(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toUpperCase();
+}
+
 /**
- * Shared authentication and database context.
+ * Gets all active slots for a weekday.
  */
+function normalizeScheduleSlots(day) {
+  if (!day || typeof day !== "object") {
+    return [];
+  }
+
+  if (day.active === false) {
+    return [];
+  }
+
+  const slots = Array.isArray(day)
+    ? day
+    : Array.isArray(day.slots)
+      ? day.slots
+      : [];
+
+  return slots.filter((slot) => {
+    return (
+      slot &&
+      typeof slot === "object" &&
+      slot.active !== false &&
+      slot.open &&
+      slot.close
+    );
+  });
+}
+
+/**
+ * Extracts booking slot information.
+ */
+function getBookingSlot(booking) {
+  const slot =
+    booking.slot ??
+    booking.timeSlot ??
+    booking.appointmentSlot;
+
+  if (
+    slot &&
+    typeof slot === "object" &&
+    !Array.isArray(slot)
+  ) {
+    return {
+      open: normalizeSlotTime(slot.open),
+      close: normalizeSlotTime(slot.close),
+      checkupStartTime: normalizeSlotTime(
+        slot.checkupStartTime
+      ),
+    };
+  }
+
+  if (typeof slot === "string") {
+    const match = slot.match(
+      /^\s*(.*?)\s*-\s*(.*?)\s*$/
+    );
+
+    if (match) {
+      return {
+        open: normalizeSlotTime(match[1]),
+        close: normalizeSlotTime(match[2]),
+        checkupStartTime: "",
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Checks whether the booking slot matches
+ * any slot in the updated weekday schedule.
+ */
+function bookingSlotMatchesSchedule(
+  booking,
+  availableSlots
+) {
+  const bookingSlot = getBookingSlot(booking);
+
+  if (
+    !bookingSlot ||
+    !bookingSlot.open ||
+    !bookingSlot.close
+  ) {
+    return false;
+  }
+
+  return availableSlots.some((scheduleSlot) => {
+    const sameOpen =
+      normalizeSlotTime(scheduleSlot.open) ===
+      bookingSlot.open;
+
+    const sameClose =
+      normalizeSlotTime(scheduleSlot.close) ===
+      bookingSlot.close;
+
+    const sameCheckupStart =
+      !bookingSlot.checkupStartTime ||
+      normalizeSlotTime(
+        scheduleSlot.checkupStartTime
+      ) === bookingSlot.checkupStartTime;
+
+    return (
+      sameOpen &&
+      sameClose &&
+      sameCheckupStart
+    );
+  });
+}
+
+/**
+ * Gets weekday from YYYY-MM-DD.
+ */
+function getBookingWeekday(date) {
+  const value = String(date || "");
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const parsed = new Date(
+    `${value}T00:00:00.000Z`
+  );
+
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    return null;
+  }
+
+  return [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ][parsed.getUTCDay()];
+}
+
+/**
+ * Creates the booking identity filter.
+ *
+ * Doctor bookings: doctorId
+ * Staff bookings: staffId
+ *
+ * Supports string and ObjectId values.
+ */
+function getBookingIdentityFilter(member, role) {
+  const identityField =
+    role === "doctor" ? "doctorId" : "staffId";
+
+  const ids = [
+    String(member._id),
+    member.teamMemberId,
+    member.employeeId,
+    member.id,
+  ]
+    .filter(
+      (value) =>
+        value != null && String(value).trim()
+    )
+    .map(String);
+
+  const uniqueIds = [...new Set(ids)];
+
+  const conditions = uniqueIds.map((id) => ({
+    [identityField]: id,
+  }));
+
+  if (isObjectId(String(member._id))) {
+    conditions.push({
+      [identityField]: new ObjectId(
+        String(member._id)
+      ),
+    });
+  }
+
+  return {
+    $or: conditions,
+  };
+}
+
+
+function normalizeWeeklySchedule(schedule) {
+  const days = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+  ];
+
+  const normalized = {};
+
+  for (const day of days) {
+    const capitalizedDay =
+      day.charAt(0).toUpperCase() + day.slice(1);
+
+    const dayData =
+      schedule?.[day] ??
+      schedule?.[capitalizedDay];
+
+    const inputSlots = Array.isArray(dayData)
+      ? dayData
+      : Array.isArray(dayData?.slots)
+        ? dayData.slots
+        : [];
+
+    const slots = inputSlots.filter(
+      (slot) =>
+        slot &&
+        typeof slot === "object" &&
+        !Array.isArray(slot) &&
+        slot.active !== false &&
+        slot.open &&
+        slot.close
+    ).map((slot) => ({
+      ...slot,
+      active: true,
+    }));
+
+    normalized[day] = {
+      active: slots.length > 0,
+      slots,
+    };
+  }
+
+  return normalized;
+}
+
+async function updateScheduleAffectedBookings(
+  db,
+  member,
+  newSchedule,
+  role
+) {
+  const bookingsCollection = db.collection("bookings");
+
+  const bookingIdentityFilter =
+    getBookingIdentityFilter(member, role);
+
+  const existingBookings = await bookingsCollection
+    .find(bookingIdentityFilter)
+    .toArray();
+
+  console.log(`${role} schedule booking scan:`, {
+    memberId: String(member._id),
+    totalBookings: existingBookings.length,
+  });
+
+  const affectedIds = [];
+
+  for (const booking of existingBookings) {
+    const weekday = getBookingWeekday(
+      booking.date
+    );
+
+    if (!weekday) {
+      continue;
+    }
+
+    const capitalizedDay =
+      weekday.charAt(0).toUpperCase() +
+      weekday.slice(1);
+
+    const daySchedule =
+      newSchedule?.[weekday] ??
+      newSchedule?.[capitalizedDay];
+
+    const availableSlots =
+      normalizeScheduleSlots(daySchedule);
+
+    const matches = bookingSlotMatchesSchedule(
+      booking,
+      availableSlots
+    );
+
+    if (!matches) {
+      affectedIds.push(booking._id);
+    }
+  }
+
+  if (affectedIds.length === 0) {
+    return 0;
+  }
+
+  const updateFields = {
+    status: "pending",
+    byTeamMember: true,
+    updatedAt: new Date(),
+  };
+
+  if (role === "doctor") {
+    updateFields.byDoctor = true;
+  } else {
+    updateFields.byStaff = true;
+  }
+
+  const result = await bookingsCollection.updateMany(
+    {
+      _id: {
+        $in: affectedIds,
+      },
+      status: {
+        $nin: PROTECTED_BOOKING_STATUSES,
+      },
+    },
+    {
+      $set: updateFields,
+    }
+  );
+
+  console.log(`${role} schedule update completed:`, {
+    memberId: String(member._id),
+    scannedBookings: existingBookings.length,
+    mismatchedBookings: affectedIds.length,
+    modifiedBookings: result.modifiedCount,
+  });
+
+  return result.modifiedCount || 0;
+}
+
+/* =========================================================
+   AUTHENTICATION CONTEXT
+========================================================= */
+
 async function getContext() {
   const session = await getServerSession(authOptions);
 
   if (!session?.user) {
     return {
-      error: json({ message: "Please log in first." }, 401),
+      error: json(
+        { message: "Please log in first." },
+        401
+      ),
     };
   }
 
@@ -363,11 +740,17 @@ async function getContext() {
   const db = client.db(process.env.MONGODB);
   const team = db.collection("team");
 
-  const member = await getTeamMember(team, session.user);
+  const member = await getTeamMember(
+    team,
+    session.user
+  );
 
   if (!member) {
     return {
-      error: json({ message: "Team member account not found." }, 404),
+      error: json(
+        { message: "Team member account not found." },
+        404
+      ),
     };
   }
 
@@ -379,58 +762,97 @@ async function getContext() {
   };
 }
 
-// GET /api/team/profile
+/* =========================================================
+   GET /api/team/profile
+========================================================= */
+
 export async function GET() {
   try {
     const context = await getContext();
+
     if (context.error) return context.error;
 
     const { db, member } = context;
-    const businessName = await getBusinessName(db, member);
+
+    const businessName = await getBusinessName(
+      db,
+      member
+    );
 
     return json({
       success: true,
-      profile: serializeProfile(member, businessName),
+      profile: serializeProfile(
+        member,
+        businessName
+      ),
     });
   } catch (error) {
     console.error("GET team profile error:", error);
 
-    return json({ message: "Failed to load your profile." }, 500);
+    return json(
+      {
+        message: "Failed to load your profile.",
+      },
+      500
+    );
   }
 }
 
-// PUT /api/team/profile
+/* =========================================================
+   PUT /api/team/profile
+========================================================= */
+
 export async function PUT(request) {
   try {
     const context = await getContext();
+
     if (context.error) return context.error;
 
     const { db, team, member, role } = context;
 
     let body;
+
     try {
       body = await request.json();
     } catch {
-      return json({ message: "Invalid JSON request body." }, 400);
+      return json(
+        { message: "Invalid JSON request body." },
+        400
+      );
     }
 
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return json({ message: "Invalid request body." }, 400);
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body)
+    ) {
+      return json(
+        { message: "Invalid request body." },
+        400
+      );
     }
 
     if (
       body.role !== undefined &&
       normalizeRole(body.role) !== role
     ) {
-      return json({ message: "Forbidden: role mismatch." }, 403);
+      return json(
+        { message: "Forbidden: role mismatch." },
+        403
+      );
     }
 
     const update = {};
     const unset = {};
 
-    // Name
+    /* =========================
+       NAME
+    ========================= */
+
     if (body.name !== undefined) {
-      const name = String(body.name || "").trim();
+      const name = String(
+        body.name || ""
+      ).trim();
 
       if (!name || name.length > 100) {
         return json(
@@ -445,14 +867,24 @@ export async function PUT(request) {
       update.name = name;
     }
 
-    // Email
+    /* =========================
+       EMAIL
+    ========================= */
+
     if (body.email !== undefined) {
-      const email = String(body.email || "")
+      const email = String(
+        body.email || ""
+      )
         .trim()
         .toLowerCase();
 
       if (email && !isValidEmail(email)) {
-        return json({ message: "Please enter a valid email." }, 400);
+        return json(
+          {
+            message: "Please enter a valid email.",
+          },
+          400
+        );
       }
 
       update.email = email || null;
@@ -462,9 +894,14 @@ export async function PUT(request) {
       }
     }
 
-    // Phone
+    /* =========================
+       PHONE
+    ========================= */
+
     if (body.phone !== undefined) {
-      const phone = String(body.phone || "").replace(/\s+/g, "");
+      const phone = String(
+        body.phone || ""
+      ).replace(/\s+/g, "");
 
       if (phone && !isValidPhone(phone)) {
         return json(
@@ -483,12 +920,20 @@ export async function PUT(request) {
       }
     }
 
-    // Experience
+    /* =========================
+       EXPERIENCE
+    ========================= */
+
     if (body.experience !== undefined) {
-      if (body.experience === null || body.experience === "") {
+      if (
+        body.experience === null ||
+        body.experience === ""
+      ) {
         update.experience = null;
       } else {
-        const experience = Number(body.experience);
+        const experience = Number(
+          body.experience
+        );
 
         if (
           !Number.isFinite(experience) ||
@@ -508,9 +953,14 @@ export async function PUT(request) {
       }
     }
 
-    // Profile image handling: Updates MongoDB properly
+    /* =========================
+       PROFILE IMAGE
+    ========================= */
+
     if (body.profileImage !== undefined) {
-      const imageUrl = String(body.profileImage || "").trim();
+      const imageUrl = String(
+        body.profileImage || ""
+      ).trim();
 
       if (imageUrl) {
         try {
@@ -518,7 +968,8 @@ export async function PUT(request) {
 
           if (
             parsedUrl.protocol !== "https:" ||
-            parsedUrl.hostname !== "res.cloudinary.com" ||
+            parsedUrl.hostname !==
+              "res.cloudinary.com" ||
             parsedUrl.username ||
             parsedUrl.password
           ) {
@@ -532,32 +983,59 @@ export async function PUT(request) {
           }
         } catch {
           return json(
-            { message: "Invalid profile image URL." },
+            {
+              message: "Invalid profile image URL.",
+            },
             400
           );
         }
 
         update.profileImage = imageUrl;
-        // Clean legacy fields so profileImage is canonical
-        if (Object.hasOwn(member, "image")) update.image = imageUrl;
-        if (Object.hasOwn(member, "imageUrl")) update.imageUrl = imageUrl;
-        if (Object.hasOwn(member, "photo")) update.photo = imageUrl;
+
+        if (Object.hasOwn(member, "image")) {
+          update.image = imageUrl;
+        }
+
+        if (Object.hasOwn(member, "imageUrl")) {
+          update.imageUrl = imageUrl;
+        }
+
+        if (Object.hasOwn(member, "photo")) {
+          update.photo = imageUrl;
+        }
       } else {
         update.profileImage = null;
-        if (Object.hasOwn(member, "image")) update.image = null;
-        if (Object.hasOwn(member, "imageUrl")) update.imageUrl = null;
-        if (Object.hasOwn(member, "photo")) update.photo = null;
+
+        if (Object.hasOwn(member, "image")) {
+          update.image = null;
+        }
+
+        if (Object.hasOwn(member, "imageUrl")) {
+          update.imageUrl = null;
+        }
+
+        if (Object.hasOwn(member, "photo")) {
+          update.photo = null;
+        }
       }
     }
 
-    // Doctor-specific fields
+    /* =========================
+       DOCTOR-ONLY FIELDS
+    ========================= */
+
     if (role === "doctor") {
       if (body.specialization !== undefined) {
-        const specialization = String(body.specialization || "").trim();
+        const specialization = String(
+          body.specialization || ""
+        ).trim();
 
         if (specialization.length > 150) {
           return json(
-            { message: "Specialization is too long." },
+            {
+              message:
+                "Specialization is too long.",
+            },
             400
           );
         }
@@ -570,7 +1048,10 @@ export async function PUT(request) {
 
         if (!Number.isFinite(fee) || fee < 0) {
           return json(
-            { message: "Fee must be zero or greater." },
+            {
+              message:
+                "Fee must be zero or greater.",
+            },
             400
           );
         }
@@ -579,10 +1060,15 @@ export async function PUT(request) {
       }
 
       if (body.duration !== undefined) {
-        if (body.duration === null || body.duration === "") {
+        if (
+          body.duration === null ||
+          body.duration === ""
+        ) {
           update.duration = null;
         } else {
-          const duration = Number(body.duration);
+          const duration = Number(
+            body.duration
+          );
 
           if (
             !Number.isInteger(duration) ||
@@ -603,11 +1089,16 @@ export async function PUT(request) {
       }
     }
 
-    // Services
+    /* =========================
+       SERVICES
+    ========================= */
+
     if (body.services !== undefined) {
       if (!Array.isArray(body.services)) {
         return json(
-          { message: "Services must be an array." },
+          {
+            message: "Services must be an array.",
+          },
           400
         );
       }
@@ -617,7 +1108,11 @@ export async function PUT(request) {
       for (const service of body.services) {
         if (typeof service === "string") {
           const name = service.trim();
-          if (name) normalizedServices.push(name);
+
+          if (name) {
+            normalizedServices.push(name);
+          }
+
           continue;
         }
 
@@ -628,6 +1123,7 @@ export async function PUT(request) {
           typeof service.name === "string"
         ) {
           const name = service.name.trim();
+
           if (!name) continue;
 
           normalizedServices.push({
@@ -649,26 +1145,90 @@ export async function PUT(request) {
 
       if (normalizedServices.length > 100) {
         return json(
-          { message: "You can add up to 100 services." },
+          {
+            message:
+              "You can add up to 100 services.",
+          },
           400
         );
       }
 
       const seenStrings = new Set();
-      update.services = normalizedServices.filter((service) => {
-        if (typeof service !== "string") return true;
-        const key = service.toLowerCase();
-        if (seenStrings.has(key)) return false;
-        seenStrings.add(key);
-        return true;
-      });
+
+      update.services = normalizedServices.filter(
+        (service) => {
+          if (typeof service !== "string") {
+            return true;
+          }
+
+          const key = service.toLowerCase();
+
+          if (seenStrings.has(key)) {
+            return false;
+          }
+
+          seenStrings.add(key);
+          return true;
+        }
+      );
     }
 
-    // Holidays
-    if (body.holidayDates !== undefined) {
-      const normalizedDates = normalizeHolidayDates(
-        body.holidayDates
+    
+/* =====================================================
+   DOCTOR + STAFF SCHEDULE UPDATE
+===================================================== */
+
+if (body.schedule !== undefined) {
+  if (
+    !body.schedule ||
+    typeof body.schedule !== "object" ||
+    Array.isArray(body.schedule)
+  ) {
+    return json(
+      { message: "Invalid schedule format." },
+      400
+    );
+  }
+
+  const oldSchedule = normalizeWeeklySchedule(
+    member.schedule || {}
+  );
+
+  const newSchedule = normalizeWeeklySchedule(
+    body.schedule
+  );
+
+  const scheduleChanged =
+    JSON.stringify(oldSchedule) !==
+    JSON.stringify(newSchedule);
+
+  if (scheduleChanged) {
+    const affectedCount =
+      await updateScheduleAffectedBookings(
+        db,
+        member,
+        newSchedule,
+        role
       );
+
+    update.schedule = newSchedule;
+
+    console.log(`${role} schedule updated:`, {
+      memberId: String(member._id),
+      affectedBookings: affectedCount,
+      schedule: newSchedule,
+    });
+  }
+}
+
+
+    /* =====================================================
+       DOCTOR + STAFF HOLIDAY UPDATE
+    ===================================================== */
+
+    if (body.holidayDates !== undefined) {
+      const normalizedDates =
+        normalizeHolidayDates(body.holidayDates);
 
       if (normalizedDates === null) {
         return json(
@@ -680,55 +1240,159 @@ export async function PUT(request) {
         );
       }
 
-      update.holidayDates = getActiveHolidayDates(normalizedDates);
+      const newHolidayDates =
+        getActiveHolidayDates(normalizedDates);
+
+      const previousHolidayDates =
+        getActiveHolidayDates(member.holidayDates);
+
+      const previousSet = new Set(
+        previousHolidayDates
+      );
+
+      const newlyAddedHolidays =
+        newHolidayDates.filter(
+          (date) => !previousSet.has(date)
+        );
+
+      update.holidayDates = newHolidayDates;
+
+      if (newlyAddedHolidays.length > 0) {
+        const bookings = db.collection("bookings");
+
+        const bookingIdentityFilter =
+          getBookingIdentityFilter(member, role);
+
+        const updateFields = {
+          status: "pending",
+          byTeamMember: true,
+          reason:
+            role === "doctor"
+              ? "Doctor declared this date as a holiday."
+              : "Staff member declared this date as a holiday.",
+          updatedAt: new Date(),
+        };
+
+        if (role === "doctor") {
+          updateFields.byDoctor = true;
+        } else {
+          updateFields.byStaff = true;
+        }
+
+        const result = await bookings.updateMany(
+          {
+            $and: [
+              bookingIdentityFilter,
+              {
+                date: {
+                  $in: newlyAddedHolidays,
+                },
+              },
+              {
+                status: {
+                  $nin: PROTECTED_BOOKING_STATUSES,
+                },
+              },
+            ],
+          },
+          {
+            $set: updateFields,
+          }
+        );
+
+        console.log(`${role} holiday bookings updated:`, {
+          memberId: String(member._id),
+          newHolidays: newlyAddedHolidays,
+          affectedBookings: result.modifiedCount,
+        });
+      }
     }
+
+    /* =========================
+       NO CHANGES
+    ========================= */
 
     if (Object.keys(update).length === 0) {
       return json(
-        { message: "No valid profile changes were provided." },
+        {
+          message:
+            "No valid profile changes were provided.",
+        },
         400
       );
     }
 
     update.updatedAt = new Date();
 
-    // Key Fix: Persist updates directly into MongoDB
-    const mongoUpdateQuery = { $set: update };
+    /* =========================
+       SAVE PROFILE TO MONGODB
+    ========================= */
+
+    const mongoUpdateQuery = {
+      $set: update,
+    };
+
     if (Object.keys(unset).length > 0) {
       mongoUpdateQuery.$unset = unset;
     }
 
-    await team.updateOne({ _id: member._id }, mongoUpdateQuery);
+    await team.updateOne(
+      {
+        _id: member._id,
+      },
+      mongoUpdateQuery
+    );
 
-    // Fetch the updated member document from MongoDB to verify changes
-    const updatedMember = await team.findOne({ _id: member._id });
-    const businessName = await getBusinessName(db, updatedMember);
+    /* =========================
+       FETCH UPDATED PROFILE
+    ========================= */
+
+    const updatedMember = await team.findOne({
+      _id: member._id,
+    });
+
+    const businessName = await getBusinessName(
+      db,
+      updatedMember
+    );
 
     return json({
       success: true,
       message: "Profile updated successfully.",
-      profile: serializeProfile(updatedMember, businessName),
+      profile: serializeProfile(
+        updatedMember,
+        businessName
+      ),
     });
   } catch (error) {
     console.error("PUT team profile error:", error);
 
     return json(
-      { message: "Failed to process your profile update." },
+      {
+        message:
+          "Failed to process your profile update.",
+      },
       500
     );
   }
 }
 
-// DELETE /api/team/profile
+/* =========================================================
+   DELETE /api/team/profile
+========================================================= */
+
 export async function DELETE() {
   try {
     const context = await getContext();
+
     if (context.error) return context.error;
 
     const { db, team, member } = context;
 
     await team.updateOne(
-      { _id: member._id },
+      {
+        _id: member._id,
+      },
       {
         $unset: {
           profileImage: "",
@@ -742,23 +1406,36 @@ export async function DELETE() {
       }
     );
 
-    const updatedMember = await team.findOne({ _id: member._id });
+    const updatedMember = await team.findOne({
+      _id: member._id,
+    });
+
     const businessName = updatedMember
       ? await getBusinessName(db, updatedMember)
       : "";
 
     return json({
       success: true,
-      message: "Profile image removed successfully.",
+      message:
+        "Profile image removed successfully.",
       profile: updatedMember
-        ? serializeProfile(updatedMember, businessName)
+        ? serializeProfile(
+            updatedMember,
+            businessName
+          )
         : null,
     });
   } catch (error) {
-    console.error("DELETE team profile image error:", error);
+    console.error(
+      "DELETE team profile image error:",
+      error
+    );
 
     return json(
-      { message: "Failed to remove the profile image." },
+      {
+        message:
+          "Failed to remove the profile image.",
+      },
       500
     );
   }
