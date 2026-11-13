@@ -6,7 +6,10 @@ import clientPromise from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import webpush from "web-push";
 
- 
+export const runtime = "nodejs";
+export const revalidate = 0;
+
+const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
 // VAPID configuration
 const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim();
@@ -18,16 +21,130 @@ const vapidConfigured = Boolean(
 );
 
 if (vapidConfigured) {
-  webpush.setVapidDetails(
-    vapidSubject,
-    vapidPublicKey,
-    vapidPrivateKey
-  );
+  try {
+    webpush.setVapidDetails(
+      vapidSubject,
+      vapidPublicKey,
+      vapidPrivateKey
+    );
+  } catch (error) {
+    console.error("VAPID configuration error:", error);
+  }
+}
+
+// Send native Expo Push Notifications.
+async function sendExpoPush(users, recipient, notification) {
+  const tokens = Array.isArray(recipient.expoPushTokens)
+    ? recipient.expoPushTokens
+        .map((item) => item?.token)
+        .filter(
+          (token) =>
+            typeof token === "string" &&
+            /^(Expo(nent)?PushToken)\[[^\]]+\]$/.test(token)
+        )
+    : [];
+
+  if (tokens.length === 0) {
+    return {
+      sent: false,
+      sentCount: 0,
+      reason: "No valid Expo push tokens registered",
+    };
+  }
+
+  try {
+    const payload = tokens.map((token) => ({
+      to: token,
+      sound: "default",
+      title: notification.title,
+      body: notification.message,
+      priority: "high",
+      channelId: "default",
+      data: {
+        url: notification.url,
+        notificationId: notification.notificationId,
+      },
+    }));
+
+    const response = await fetch(EXPO_PUSH_URL, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Accept-Encoding": "gzip, deflate",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error("Expo Push HTTP error:", result);
+
+      return {
+        sent: false,
+        sentCount: 0,
+        reason: "Expo Push service request failed",
+      };
+    }
+
+    const tickets = Array.isArray(result.data) ? result.data : [];
+    let sentCount = 0;
+    const invalidTokens = [];
+
+    tickets.forEach((ticket, index) => {
+      if (ticket.status === "ok") {
+        sentCount++;
+      } else {
+        console.error("Expo Push ticket error:", ticket);
+
+        if (ticket.details?.error === "DeviceNotRegistered") {
+          invalidTokens.push(tokens[index]);
+        }
+      }
+    });
+
+    // Remove expired native device tokens.
+    if (invalidTokens.length > 0) {
+      await users.updateOne(
+        { _id: recipient._id },
+        {
+          $pull: {
+            expoPushTokens: {
+              token: { $in: invalidTokens },
+            },
+          },
+          $set: {
+            expoPushUpdatedAt: new Date(),
+          },
+        }
+      );
+    }
+
+    return {
+      sent: sentCount > 0,
+      sentCount,
+      totalTokens: tokens.length,
+      invalidTokensRemoved: invalidTokens.length,
+      reason:
+        sentCount > 0
+          ? "Expo Push notification accepted"
+          : "Expo Push delivery was not accepted",
+    };
+  } catch (error) {
+    console.error("Expo Push delivery error:", error);
+
+    return {
+      sent: false,
+      sentCount: 0,
+      reason: "Expo Push delivery failed",
+    };
+  }
 }
 
 export async function POST(request) {
   try {
-    // 1. Authenticate sender
+    // 1. Authenticate sender.
     const session = await getServerSession(authOptions);
 
     if (!session?.user) {
@@ -49,18 +166,7 @@ export async function POST(request) {
       );
     }
 
-    // 2. Check VAPID configuration
-    if (!vapidConfigured) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "VAPID configuration is missing",
-        },
-        { status: 500 }
-      );
-    }
-
-    // 3. Read request
+    // 2. Read request.
     const { userId, title, message, url } = await request.json();
 
     if (!userId || !title || !message) {
@@ -98,13 +204,12 @@ export async function POST(request) {
         ? url
         : "/my-bookings";
 
-    // 4. Database
+    // 3. Database.
     const client = await clientPromise;
     const db = client.db("rahul");
-
     const users = db.collection("users");
 
-    // 5. Find recipient
+    // 4. Find recipient.
     const recipient = await users.findOne({
       _id: new ObjectId(String(userId)),
     });
@@ -116,9 +221,9 @@ export async function POST(request) {
       );
     }
 
-    // 6. Save notification
+    // 5. Save notification.
     const notification = {
-      userId: new ObjectId(String(userId)),
+      userId: recipient._id,
       title: title.trim(),
       message: message.trim(),
       url: notificationUrl,
@@ -133,138 +238,110 @@ export async function POST(request) {
       .collection("notifications")
       .insertOne(notification);
 
-    // 7. Read subscription
+    const notificationId = result.insertedId.toString();
+
+    // 6. Send Web Push independently.
+    let webPushSent = false;
+    let webPushError = null;
+
     const subscription = recipient.webPushSubscription;
 
-    if (
-      !recipient.webPushEnabled ||
-      !subscription?.endpoint ||
-      !subscription?.keys?.p256dh ||
-      !subscription?.keys?.auth
-    ) {
-      return NextResponse.json({
-        success: true,
-        pushSent: false,
-        message: "Notification saved, but push subscription is missing",
-        notificationId: result.insertedId.toString(),
-      });
-    }
-
-    // 8. Verify subscription structure
-    if (
-      typeof subscription.endpoint !== "string" ||
-      typeof subscription.keys.p256dh !== "string" ||
-      typeof subscription.keys.auth !== "string"
-    ) {
-      return NextResponse.json({
-        success: true,
-        pushSent: false,
-        message: "Notification saved, but subscription format is invalid",
-        notificationId: result.insertedId.toString(),
-      });
-    }
-
-    // 9. Payload
-    const payload = JSON.stringify({
-      title: notification.title,
-      body: notification.message,
-      url: notification.url,
-      icon: "/logo.png",
-      badge: "/logo.png",
-      notificationId: result.insertedId.toString(),
-    });
-
-    // 10. Send push
-    try {
-      console.log("========== WEB PUSH DEBUG ==========");
-      console.log("Recipient:", String(userId));
-      console.log(
-        "Subscription origin:",
-        new URL(subscription.endpoint).origin
-      );
-      console.log("VAPID public key configured:", Boolean(vapidPublicKey));
-      console.log("VAPID private key configured:", Boolean(vapidPrivateKey));
-      console.log("Subscription keys present:", Boolean(
-        subscription.keys.p256dh && subscription.keys.auth
-      ));
-
-      const pushResponse = await webpush.sendNotification(
-        subscription,
-        payload,
-        {
-          TTL: 3600,
-          urgency: "high",
-        }
-      );
-
-      console.log("Push response status:", pushResponse.statusCode);
-      console.log("Push notification sent successfully");
-      console.log("====================================");
-
-      return NextResponse.json({
-        success: true,
-        pushSent: true,
-        message: "Notification saved and push sent successfully",
-        notificationId: result.insertedId.toString(),
-      });
-
-    } catch (pushError) {
-      console.error("========== WEB PUSH ERROR ==========");
-      console.error("Error name:", pushError.name);
-      console.error("Error message:", pushError.message);
-      console.error("Status code:", pushError.statusCode);
-      console.error("Response body:", pushError.body);
-      console.error("Response headers:", pushError.headers);
-      console.error("====================================");
-
-      // Remove expired subscription
+    if (recipient.webPushEnabled === true) {
       if (
-        pushError.statusCode === 404 ||
-        pushError.statusCode === 410
+        !subscription?.endpoint ||
+        !subscription?.keys?.p256dh ||
+        !subscription?.keys?.auth ||
+        typeof subscription.endpoint !== "string" ||
+        typeof subscription.keys.p256dh !== "string" ||
+        typeof subscription.keys.auth !== "string"
       ) {
-        await users.updateOne(
-          {
-            _id: new ObjectId(String(userId)),
-            "webPushSubscription.endpoint": subscription.endpoint,
-          },
-          {
-            $unset: {
-              webPushSubscription: "",
-            },
-            $set: {
-              webPushEnabled: false,
-            },
+        webPushError = "Invalid or missing Web Push subscription";
+      } else if (!vapidConfigured) {
+        webPushError = "VAPID configuration is missing";
+      } else {
+        const payload = JSON.stringify({
+          title: notification.title,
+          body: notification.message,
+          url: notification.url,
+          icon: "/logo.png",
+          badge: "/logo.png",
+          notificationId,
+        });
+
+        try {
+          console.log("Sending Web Push to:", String(userId));
+
+          await webpush.sendNotification(
+            subscription,
+            payload,
+            {
+              TTL: 3600,
+              urgency: "high",
+            }
+          );
+
+          webPushSent = true;
+        } catch (pushError) {
+          console.error("Web Push delivery error:", pushError);
+
+          webPushError = pushError.message;
+
+          // Remove expired subscription.
+          if (
+            pushError.statusCode === 404 ||
+            pushError.statusCode === 410
+          ) {
+            await users.updateOne(
+              {
+                _id: recipient._id,
+                "webPushSubscription.endpoint": subscription.endpoint,
+              },
+              {
+                $unset: {
+                  webPushSubscription: "",
+                },
+                $set: {
+                  webPushEnabled: false,
+                  webPushUpdatedAt: new Date(),
+                },
+              }
+            );
           }
-        );
+        }
       }
-
-      let errorMessage = "Unable to deliver push notification";
-
-      if (pushError.statusCode === 400) {
-        errorMessage = "Invalid push subscription or payload";
-      } else if (pushError.statusCode === 401) {
-        errorMessage = "Push authentication failed. Check VAPID keys";
-      } else if (pushError.statusCode === 403) {
-        errorMessage = "Push service rejected authentication";
-      } else if (pushError.statusCode === 404 ||
-                 pushError.statusCode === 410) {
-        errorMessage = "Push subscription expired or invalid";
-      }
-
-      return NextResponse.json({
-        success: true,
-        pushSent: false,
-        message: "Notification saved, but push delivery failed",
-        notificationId: result.insertedId.toString(),
-        pushError: errorMessage,
-        debug: {
-          statusCode: pushError.statusCode || null,
-          errorName: pushError.name || null,
-          errorDetails: pushError.body || pushError.message || null,
-        },
-      });
+    } else {
+      webPushError = "Web Push is disabled";
     }
 
+    // 7. Send Expo Push independently.
+    const expoResult = await sendExpoPush(
+      users,
+      recipient,
+      {
+        title: notification.title,
+        message: notification.message,
+        url: notification.url,
+        notificationId,
+      }
+    );
+
+    // 8. Final response.
+    const expoPushSent = expoResult.sent === true;
+    const pushSent = webPushSent || expoPushSent;
+
+    return NextResponse.json({
+      success: true,
+      pushSent,
+      webPushSent,
+      expoPushSent,
+      message: pushSent
+        ? "Notification saved and push delivery accepted"
+        : "Notification saved, but push delivery was unsuccessful",
+      notificationId,
+      webPushError,
+      expoPushReason: expoResult.reason,
+      expoDevicesSent: expoResult.sentCount || 0,
+    });
   } catch (error) {
     console.error("Send notification API error:", error);
 

@@ -3,7 +3,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
-import { Bell, LoaderCircle, X, ShieldCheck } from "lucide-react";
+import {
+  Bell,
+  LoaderCircle,
+  X,
+  ShieldCheck,
+} from "lucide-react";
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat(
@@ -78,6 +83,47 @@ function getBrowserSupport() {
   return null;
 }
 
+// ==========================================
+// REQUEST NATIVE EXPO PUSH TOKEN
+// ==========================================
+
+function requestNativePushToken() {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      window.removeEventListener(
+        "ZERIY_PUSH_TOKEN",
+        handleToken
+      );
+
+      reject(
+        new Error(
+          "Mobile notification registration timed out."
+        )
+      );
+    }, 30000);
+
+    function handleToken(event) {
+      clearTimeout(timeout);
+
+      window.removeEventListener(
+        "ZERIY_PUSH_TOKEN",
+        handleToken
+      );
+
+      resolve(event.detail);
+    }
+
+    window.addEventListener(
+      "ZERIY_PUSH_TOKEN",
+      handleToken
+    );
+
+    window.ReactNativeWebView.postMessage(
+      "ZERIY_REGISTER_PUSH"
+    );
+  });
+}
+
 export default function EnableNotifications({
   webPushEnabled = false,
   updateSession,
@@ -91,15 +137,27 @@ export default function EnableNotifications({
   const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);
   const [message, setMessage] = useState("");
-
-  // Session is the primary source of truth.
-  const sessionEnabled = Boolean(
-    session?.user?.webPushEnabled ?? webPushEnabled
-  );
+  const [nativeEnabled, setNativeEnabled] = useState(false);
 
   const syncSession = updateSession || update;
 
-  // Show the banner only when notifications are disabled.
+  const isNativeApp =
+    typeof window !== "undefined" &&
+    Boolean(window.ReactNativeWebView?.postMessage);
+
+  // Use the correct subscription status for each platform.
+  const sessionEnabled = isNativeApp
+    ? Boolean(
+        session?.user?.expoPushEnabled ?? nativeEnabled
+      )
+    : Boolean(
+        session?.user?.webPushEnabled ?? webPushEnabled
+      );
+
+  // ==========================================
+  // SHOW / HIDE BANNER
+  // ==========================================
+
   useEffect(() => {
     if (status !== "authenticated" || !session?.user) {
       setVisible(false);
@@ -111,20 +169,33 @@ export default function EnableNotifications({
       return;
     }
 
-    // Slide down after authentication/session check.
     const frame = requestAnimationFrame(() => {
       setVisible(true);
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [status, session?.user, sessionEnabled]);
+  }, [
+    status,
+    session?.user,
+    sessionEnabled,
+  ]);
 
-  // Update NextAuth session.
+  // ==========================================
+  // UPDATE NEXTAUTH SESSION
+  // ==========================================
+
   const updateServerSession = useCallback(
     async (value) => {
-      await syncSession({
-        webPushEnabled: value,
-      });
+      try {
+        await syncSession({
+          webPushEnabled: value,
+        });
+      } catch (error) {
+        console.error(
+          "Session update error:",
+          error
+        );
+      }
     },
     [syncSession]
   );
@@ -145,6 +216,57 @@ export default function EnableNotifications({
         throw new Error("Please login first.");
       }
 
+      // ======================================
+      // NATIVE EXPO MOBILE APP
+      // ======================================
+
+      if (isNativeApp) {
+        const token = await requestNativePushToken();
+
+        if (!token) {
+          throw new Error(
+            "Unable to get mobile push token."
+          );
+        }
+
+        // Save native token to MongoDB.
+        const response = await fetch(
+          "/api/notifications/native-subscribe",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "same-origin",
+            cache: "no-store",
+            body: JSON.stringify({
+              token,
+            }),
+          }
+        );
+
+        const data = await response
+          .json()
+          .catch(() => ({}));
+
+        if (!response.ok || !data.success) {
+          throw new Error(
+            data.message ||
+            "Unable to save mobile push token."
+          );
+        }
+
+        setNativeEnabled(true);
+        setMessage("");
+        setVisible(false);
+
+        return;
+      }
+
+      // ======================================
+      // EXISTING WEBSITE WEB PUSH
+      // ======================================
+
       const unsupported = getBrowserSupport();
 
       if (unsupported) {
@@ -155,7 +277,9 @@ export default function EnableNotifications({
         process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim();
 
       if (!publicKey) {
-        throw new Error("VAPID public key is missing.");
+        throw new Error(
+          "VAPID public key is missing."
+        );
       }
 
       const applicationServerKey =
@@ -165,7 +289,8 @@ export default function EnableNotifications({
       let permission = Notification.permission;
 
       if (permission === "default") {
-        permission = await Notification.requestPermission();
+        permission =
+          await Notification.requestPermission();
       }
 
       if (permission !== "granted") {
@@ -181,9 +306,12 @@ export default function EnableNotifications({
       }
 
       // Register service worker.
-      await navigator.serviceWorker.register("/sw.js", {
-        scope: "/",
-      });
+      await navigator.serviceWorker.register(
+        "/sw.js",
+        {
+          scope: "/",
+        }
+      );
 
       const registration =
         await navigator.serviceWorker.ready;
@@ -222,7 +350,7 @@ export default function EnableNotifications({
           });
       }
 
-      // Save subscription to MongoDB.
+      // Save Web Push subscription to MongoDB.
       const response = await fetch(
         "/api/notifications/subscribe",
         {
@@ -232,27 +360,34 @@ export default function EnableNotifications({
           },
           credentials: "same-origin",
           cache: "no-store",
-          body: JSON.stringify(subscription.toJSON()),
+          body: JSON.stringify(
+            subscription.toJSON()
+          ),
         }
       );
 
-      const data = await response.json().catch(() => ({}));
+      const data = await response
+        .json()
+        .catch(() => ({}));
 
       if (!response.ok || !data.success) {
         throw new Error(
-          data.message || "Unable to save push subscription."
+          data.message ||
+          "Unable to save push subscription."
         );
       }
 
-      // Update NextAuth session AFTER successful MongoDB save.
+      // Update session after successful subscription.
       await updateServerSession(true);
 
-      // Close the banner.
       setMessage("");
       setVisible(false);
 
     } catch (error) {
-      console.error("Enable notification error:", error);
+      console.error(
+        "Enable notification error:",
+        error
+      );
 
       setMessage(
         error.message || "Something went wrong."
@@ -262,7 +397,10 @@ export default function EnableNotifications({
     }
   }
 
-  // Don't render for logged-out users or enabled sessions.
+  // ==========================================
+  // AUTHENTICATION CHECK
+  // ==========================================
+
   if (
     status !== "authenticated" ||
     !session?.user ||
@@ -270,6 +408,10 @@ export default function EnableNotifications({
   ) {
     return null;
   }
+
+  // ==========================================
+  // UI
+  // ==========================================
 
   return (
     <div
@@ -282,15 +424,17 @@ export default function EnableNotifications({
       <div className="relative overflow-hidden rounded-2xl border border-violet-100 bg-white p-3.5 shadow-xl shadow-violet-900/10 sm:p-4">
 
         {/* Top accent */}
- 
+
         <div className="flex items-center gap-3">
 
           {/* Icon */}
+
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
             <Bell size={21} />
           </div>
 
           {/* Content */}
+
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold text-gray-900">
               Stay updated with Zeriy
@@ -302,6 +446,7 @@ export default function EnableNotifications({
           </div>
 
           {/* Close */}
+
           <button
             type="button"
             onClick={() => setVisible(false)}
@@ -314,6 +459,7 @@ export default function EnableNotifications({
         </div>
 
         {/* Error message */}
+
         {message && (
           <p
             role="alert"
@@ -324,6 +470,7 @@ export default function EnableNotifications({
         )}
 
         {/* Enable button */}
+
         <button
           type="button"
           onClick={enableNotifications}
@@ -331,16 +478,21 @@ export default function EnableNotifications({
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading ? (
-            <LoaderCircle size={17} className="animate-spin" />
+            <LoaderCircle
+              size={17}
+              className="animate-spin"
+            />
           ) : (
             <ShieldCheck size={17} />
           )}
 
-          {loading ? "Enabling..." : "Enable Notifications"}
+          {loading
+            ? "Enabling..."
+            : "Enable Notifications"}
         </button>
 
         <p className="mt-2 text-center text-[9px] text-gray-400">
-          You can manage notification permissions anytime in your browser settings.
+          You can manage notification permissions anytime in your device settings.
         </p>
       </div>
     </div>
