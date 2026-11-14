@@ -3495,6 +3495,7 @@ async function sendPatientNotification(customer) {
                               const gender = getCustomerGender(customer);
                               const age = getCustomerAge(customer);
                               const webPushEnabled=customer.webPushEnabled;
+                              const expoPushEnabled=customer.expoPushEnabled;
                               return (
                                 <div
                                   key={String(id)}
@@ -3617,7 +3618,7 @@ async function sendPatientNotification(customer) {
       Boolean(updatingCustomerId) ||
       Boolean(updatingSessionId) ||
       notifyingCustomerId === customer._id
-      || !webPushEnabled
+      || !webPushEnabled || !expoPushEnabled
     }
     className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 shadow-sm transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto"
   >
