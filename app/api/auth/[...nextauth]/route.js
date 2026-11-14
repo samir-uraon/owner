@@ -66,6 +66,46 @@ async function getWebPushEnabled(userId, role) {
   }
 }
 
+async function getExpoPushEnabled(userId, role) {
+  try {
+    if (!userId || !ObjectId.isValid(String(userId))) {
+      return false;
+    }
+
+    const collectionMap = {
+      owner: "owners",
+      doctor: "team",
+      staff: "team",
+    };
+
+    const collectionName = collectionMap[normalizeRole(role)];
+
+    if (!collectionName) {
+      return false;
+    }
+
+    const client = await clientPromise;
+    const db = client.db(process.env.MONGODB);
+
+    const user = await db.collection(collectionName).findOne(
+      {
+        _id: new ObjectId(String(userId)),
+      },
+      {
+        projection: {
+          expoPushEnabled: 1,
+        },
+      }
+    );
+
+    return user?.expoPushEnabled === true;
+
+  } catch (error) {
+    console.error("Get expo Push status error:", error);
+    return false;
+  }
+}
+
 function getTeamConditions(identifier) {
   const value = String(identifier || "").trim();
 
@@ -513,11 +553,20 @@ async jwt({ token, user, trigger }) {
       token.id,
       token.role
     );
+    token.expoPushEnabled = await getExpoPushEnabled(
+      token.id,
+      token.role
+    );
   }
 
   // Refresh notification status
   if (trigger === "update") {
     token.webPushEnabled = await getWebPushEnabled(
+      token.id,
+      token.role
+    );
+
+    token.expoPushEnabled = await getExpoPushEnabled(
       token.id,
       token.role
     );
@@ -542,6 +591,9 @@ async jwt({ token, user, trigger }) {
         // Web Push status.
         session.user.webPushEnabled =
           token.webPushEnabled === true;
+        session.user.expoPushEnabled =
+          token.expoPushEnabled === true;
+      
       }
 
       return session;
