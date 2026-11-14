@@ -123,8 +123,35 @@ async function fetchWebPush(db, booking) {
   }
 }
 
+async function fetchExpoPush(db, booking) {
+  try {
+    if (
+      !booking?.userId ||
+      !ObjectId.isValid(String(booking.userId))
+    ) {
+      return false;
+    }
+
+    const user = await db.collection("users").findOne(
+      {
+        _id: new ObjectId(String(booking.userId)),
+      },
+      {
+        projection: {
+          expoPushEnabled: 1,
+        },
+      }
+    );
+
+    return Boolean(user?.expoPushEnabled);
+  } catch (error) {
+    console.error("Fetch expo Push status error:", error);
+    return false;
+  }
+}
+
 // Normalize booking response.
-// IMPORTANT: This function is async because it fetches Web Push status.
+// IMPORTANT: This function is async because it fetches expo Push status.
 async function normalizeBooking(db, booking) {
   const patient = booking.patient || booking.customer || {};
 
@@ -138,6 +165,7 @@ async function normalizeBooking(db, booking) {
   );
 
   const webPushEnabled = await fetchWebPush(db, booking);
+const expoPushEnabled = await fetchExpoPush(db, booking);
 
   return {
     id: String(booking._id),
@@ -149,6 +177,7 @@ async function normalizeBooking(db, booking) {
 
     // Web Push status comes from users collection.
     webPushEnabled: Boolean(webPushEnabled),
+    expoPushEnabled: Boolean(expoPushEnabled),
 
     token:
       booking.token ||
