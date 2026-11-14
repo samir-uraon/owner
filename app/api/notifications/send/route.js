@@ -1,146 +1,317 @@
 
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import clientPromise from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import webpush from "web-push";
+
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import clientPromise from "@/lib/mongodb";
 
 export const runtime = "nodejs";
 export const revalidate = 0;
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
-// VAPID configuration
+// ==========================================
+// WEB PUSH CONFIGURATION
+// ==========================================
+
 const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim();
 const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY?.trim();
 const vapidSubject = process.env.VAPID_SUBJECT?.trim();
 
-const vapidConfigured = Boolean(
-  vapidPublicKey && vapidPrivateKey && vapidSubject
-);
+let vapidConfigured = false;
 
-if (vapidConfigured) {
+if (vapidPublicKey && vapidPrivateKey && vapidSubject) {
   try {
     webpush.setVapidDetails(
       vapidSubject,
       vapidPublicKey,
       vapidPrivateKey
     );
+
+    vapidConfigured = true;
   } catch (error) {
     console.error("VAPID configuration error:", error);
   }
 }
 
-// Send native Expo Push Notifications.
+// ==========================================
+// EXPO TOKEN VALIDATION
+// ==========================================
+
+function isValidExpoToken(token) {
+  return (
+    typeof token === "string" &&
+    /^(ExpoPushToken|ExponentPushToken)\[[^\]]+\]$/.test(token)
+  );
+}
+
+// ==========================================
+// REMOVE INVALID EXPO TOKENS
+// Supports both string and object token formats
+// ==========================================
+
+async function removeInvalidExpoTokens(users, recipient, invalidTokens) {
+  if (!invalidTokens.length) return;
+
+  // Remove tokens stored as strings.
+  await users.updateOne(
+    { _id: recipient._id },
+    {
+      $pull: {
+        expoPushTokens: { $in: invalidTokens },
+      },
+    }
+  );
+
+  // Remove tokens stored as objects: { token: "..." }.
+  await users.updateOne(
+    { _id: recipient._id },
+    {
+      $pull: {
+        expoPushTokens: {
+          token: { $in: invalidTokens },
+        },
+      },
+      $set: {
+        expoPushUpdatedAt: new Date(),
+      },
+    }
+  );
+}
+
+// ==========================================
+// EXPO PUSH NOTIFICATION
+// ==========================================
+
 async function sendExpoPush(users, recipient, notification) {
-  const tokens = Array.isArray(recipient.expoPushTokens)
+  if (recipient.expoPushEnabled !== true) {
+    return {
+      sent: false,
+      sentCount: 0,
+      reason: "Expo Push is disabled",
+    };
+  }
+
+  const tokenEntries = Array.isArray(recipient.expoPushTokens)
     ? recipient.expoPushTokens
-        .map((item) => item?.token)
-        .filter(
-          (token) =>
-            typeof token === "string" &&
-            /^(Expo(nent)?PushToken)\[[^\]]+\]$/.test(token)
-        )
     : [];
+
+  const tokens = [
+    ...new Set(
+      tokenEntries
+        .map((item) =>
+          typeof item === "string" ? item : item?.token
+        )
+        .filter(isValidExpoToken)
+    ),
+  ];
 
   if (tokens.length === 0) {
     return {
       sent: false,
       sentCount: 0,
+      totalTokens: 0,
       reason: "No valid Expo push tokens registered",
     };
   }
 
+  let sentCount = 0;
+  let invalidTokens = [];
+  let failedCount = 0;
+
   try {
-    const payload = tokens.map((token) => ({
-      to: token,
-      sound: "default",
-      title: notification.title,
-      body: notification.message,
-      priority: "high",
-      channelId: "default",
-      data: {
-        url: notification.url,
-        notificationId: notification.notificationId,
-      },
-    }));
+    // Expo accepts batches of up to 100 messages.
+    for (let i = 0; i < tokens.length; i += 100) {
+      const batch = tokens.slice(i, i + 100);
 
-    const response = await fetch(EXPO_PUSH_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Accept-Encoding": "gzip, deflate",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+      const payload = batch.map((token) => ({
+        to: token,
+        sound: "default",
+        title: notification.title,
+        body: notification.message,
+        priority: "high",
+        channelId: "default",
+        data: {
+          url: notification.url,
+          notificationId: notification.notificationId,
+        },
+      }));
 
-    const result = await response.json();
+      const response = await fetch(EXPO_PUSH_URL, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Accept-Encoding": "gzip, deflate",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15000),
+      });
 
-    if (!response.ok) {
-      console.error("Expo Push HTTP error:", result);
+      let result;
 
-      return {
-        sent: false,
-        sentCount: 0,
-        reason: "Expo Push service request failed",
-      };
+      try {
+        result = await response.json();
+      } catch {
+        result = null;
+      }
+
+      console.log("Expo Push HTTP status:", response.status);
+      console.log("Expo Push response:", JSON.stringify(result));
+
+      if (!response.ok) {
+        failedCount += batch.length;
+        console.error("Expo Push HTTP error:", result);
+        continue;
+      }
+
+      const tickets = Array.isArray(result?.data)
+        ? result.data
+        : [];
+
+      tickets.forEach((ticket, index) => {
+        if (ticket?.status === "ok") {
+          // Expo accepted the notification request.
+          sentCount++;
+        } else {
+          failedCount++;
+          console.error("Expo Push ticket error:", ticket);
+
+          if (ticket?.details?.error === "DeviceNotRegistered") {
+            invalidTokens.push(batch[index]);
+          }
+        }
+      });
+
+      // If Expo returned fewer tickets than messages,
+      // count the missing responses as failures.
+      if (tickets.length < batch.length) {
+        failedCount += batch.length - tickets.length;
+      }
     }
 
-    const tickets = Array.isArray(result.data) ? result.data : [];
-    let sentCount = 0;
-    const invalidTokens = [];
-
-    tickets.forEach((ticket, index) => {
-      if (ticket.status === "ok") {
-        sentCount++;
-      } else {
-        console.error("Expo Push ticket error:", ticket);
-
-        if (ticket.details?.error === "DeviceNotRegistered") {
-          invalidTokens.push(tokens[index]);
-        }
-      }
-    });
-
-    // Remove expired native device tokens.
+    // Remove expired device tokens.
     if (invalidTokens.length > 0) {
-      await users.updateOne(
-        { _id: recipient._id },
-        {
-          $pull: {
-            expoPushTokens: {
-              token: { $in: invalidTokens },
-            },
-          },
-          $set: {
-            expoPushUpdatedAt: new Date(),
-          },
-        }
+      await removeInvalidExpoTokens(
+        users,
+        recipient,
+        [...new Set(invalidTokens)]
       );
     }
 
     return {
       sent: sentCount > 0,
       sentCount,
+      failedCount,
       totalTokens: tokens.length,
-      invalidTokensRemoved: invalidTokens.length,
+      invalidTokensRemoved: [...new Set(invalidTokens)].length,
       reason:
         sentCount > 0
-          ? "Expo Push notification accepted"
-          : "Expo Push delivery was not accepted",
+          ? "Expo accepted the notification"
+          : "Expo did not accept the notification",
     };
   } catch (error) {
     console.error("Expo Push delivery error:", error);
 
     return {
-      sent: false,
-      sentCount: 0,
-      reason: "Expo Push delivery failed",
+      sent: sentCount > 0,
+      sentCount,
+      failedCount,
+      totalTokens: tokens.length,
+      reason: error.message || "Expo Push delivery failed",
     };
   }
 }
+
+// ==========================================
+// WEB PUSH NOTIFICATION
+// ==========================================
+
+async function sendWebPush(users, recipient, notification) {
+  if (recipient.webPushEnabled !== true) {
+    return {
+      sent: false,
+      reason: "Web Push is disabled",
+    };
+  }
+
+  const subscription = recipient.webPushSubscription;
+
+  if (
+    !subscription?.endpoint ||
+    !subscription?.keys?.p256dh ||
+    !subscription?.keys?.auth
+  ) {
+    return {
+      sent: false,
+      reason: "Web Push subscription is missing or invalid",
+    };
+  }
+
+  if (!vapidConfigured) {
+    return {
+      sent: false,
+      reason: "VAPID configuration is missing",
+    };
+  }
+
+  const payload = JSON.stringify({
+    title: notification.title,
+    body: notification.message,
+    url: notification.url,
+    icon: "/logo.png",
+    badge: "/logo.png",
+    notificationId: notification.notificationId,
+  });
+
+  try {
+    await webpush.sendNotification(
+      subscription,
+      payload,
+      {
+        TTL: 3600,
+        urgency: "high",
+      }
+    );
+
+    return {
+      sent: true,
+      reason: "Web Push accepted the notification",
+    };
+  } catch (error) {
+    console.error("Web Push delivery error:", error);
+
+    // Remove expired subscriptions.
+    if (error.statusCode === 404 || error.statusCode === 410) {
+      await users.updateOne(
+        {
+          _id: recipient._id,
+          "webPushSubscription.endpoint": subscription.endpoint,
+        },
+        {
+          $unset: {
+            webPushSubscription: "",
+          },
+          $set: {
+            webPushEnabled: false,
+            webPushUpdatedAt: new Date(),
+          },
+        }
+      );
+    }
+
+    return {
+      sent: false,
+      reason: error.message || "Web Push delivery failed",
+    };
+  }
+}
+
+// ==========================================
+// POST API
+// ==========================================
 
 export async function POST(request) {
   try {
@@ -149,7 +320,10 @@ export async function POST(request) {
 
     if (!session?.user) {
       return NextResponse.json(
-        { success: false, message: "Unauthorized" },
+        {
+          success: false,
+          message: "Unauthorized",
+        },
         { status: 401 }
       );
     }
@@ -166,19 +340,27 @@ export async function POST(request) {
       );
     }
 
-    // 2. Read request.
-    const { userId, title, message, url } = await request.json();
+    // 2. Validate request.
+    const body = await request.json();
+
+    const { userId, title, message, url } = body;
 
     if (!userId || !title || !message) {
       return NextResponse.json(
-        { success: false, message: "Missing required fields" },
+        {
+          success: false,
+          message: "Missing required fields",
+        },
         { status: 400 }
       );
     }
 
     if (!ObjectId.isValid(String(userId))) {
       return NextResponse.json(
-        { success: false, message: "Invalid user ID" },
+        {
+          success: false,
+          message: "Invalid user ID",
+        },
         { status: 400 }
       );
     }
@@ -192,7 +374,10 @@ export async function POST(request) {
       message.length > 1000
     ) {
       return NextResponse.json(
-        { success: false, message: "Invalid notification content" },
+        {
+          success: false,
+          message: "Invalid notification content",
+        },
         { status: 400 }
       );
     }
@@ -204,24 +389,29 @@ export async function POST(request) {
         ? url
         : "/my-bookings";
 
-    // 3. Database.
+    // 3. Connect database.
     const client = await clientPromise;
     const db = client.db("rahul");
-    const users = db.collection("users");
 
-    // 4. Find recipient.
+    const users = db.collection("users");
+    const notifications = db.collection("notifications");
+
+    // 4. Find patient.
     const recipient = await users.findOne({
       _id: new ObjectId(String(userId)),
     });
 
     if (!recipient) {
       return NextResponse.json(
-        { success: false, message: "Patient not found" },
+        {
+          success: false,
+          message: "Patient not found",
+        },
         { status: 404 }
       );
     }
 
-    // 5. Save notification.
+    // 5. Save notification in MongoDB.
     const notification = {
       userId: recipient._id,
       title: title.trim(),
@@ -229,118 +419,52 @@ export async function POST(request) {
       url: notificationUrl,
       read: false,
       createdAt: new Date(),
-      sentBy: String(
-        session.user.id || session.user._id || ""
-      ),
+      sentBy: String(session.user.id || ""),
     };
 
-    const result = await db
-      .collection("notifications")
-      .insertOne(notification);
+    const insertResult = await notifications.insertOne(notification);
 
-    const notificationId = result.insertedId.toString();
+    const notificationId = insertResult.insertedId.toString();
 
-    // 6. Send Web Push independently.
-    let webPushSent = false;
-    let webPushError = null;
+    const pushNotification = {
+      title: notification.title,
+      message: notification.message,
+      url: notification.url,
+      notificationId,
+    };
 
-    const subscription = recipient.webPushSubscription;
+    // 6. Send Web Push and Expo Push independently.
+    const [webResult, expoResult] = await Promise.all([
+      sendWebPush(users, recipient, pushNotification),
+      sendExpoPush(users, recipient, pushNotification),
+    ]);
 
-    if (recipient.webPushEnabled === true) {
-      if (
-        !subscription?.endpoint ||
-        !subscription?.keys?.p256dh ||
-        !subscription?.keys?.auth ||
-        typeof subscription.endpoint !== "string" ||
-        typeof subscription.keys.p256dh !== "string" ||
-        typeof subscription.keys.auth !== "string"
-      ) {
-        webPushError = "Invalid or missing Web Push subscription";
-      } else if (!vapidConfigured) {
-        webPushError = "VAPID configuration is missing";
-      } else {
-        const payload = JSON.stringify({
-          title: notification.title,
-          body: notification.message,
-          url: notification.url,
-          icon: "/logo.png",
-          badge: "/logo.png",
-          notificationId,
-        });
-
-        try {
-          console.log("Sending Web Push to:", String(userId));
-
-          await webpush.sendNotification(
-            subscription,
-            payload,
-            {
-              TTL: 3600,
-              urgency: "high",
-            }
-          );
-
-          webPushSent = true;
-        } catch (pushError) {
-          console.error("Web Push delivery error:", pushError);
-
-          webPushError = pushError.message;
-
-          // Remove expired subscription.
-          if (
-            pushError.statusCode === 404 ||
-            pushError.statusCode === 410
-          ) {
-            await users.updateOne(
-              {
-                _id: recipient._id,
-                "webPushSubscription.endpoint": subscription.endpoint,
-              },
-              {
-                $unset: {
-                  webPushSubscription: "",
-                },
-                $set: {
-                  webPushEnabled: false,
-                  webPushUpdatedAt: new Date(),
-                },
-              }
-            );
-          }
-        }
-      }
-    } else {
-      webPushError = "Web Push is disabled";
-    }
-
-    // 7. Send Expo Push independently.
-    const expoResult = await sendExpoPush(
-      users,
-      recipient,
-      {
-        title: notification.title,
-        message: notification.message,
-        url: notification.url,
-        notificationId,
-      }
-    );
-
-    // 8. Final response.
+    const webPushSent = webResult.sent === true;
     const expoPushSent = expoResult.sent === true;
+
     const pushSent = webPushSent || expoPushSent;
 
+    // 7. Return result.
     return NextResponse.json({
       success: true,
+      notificationSaved: true,
       pushSent,
       webPushSent,
       expoPushSent,
+
       message: pushSent
-        ? "Notification saved and push delivery accepted"
+        ? "Notification saved and push request accepted"
         : "Notification saved, but push delivery was unsuccessful",
+
       notificationId,
-      webPushError,
+
+      webPushError: webResult.reason,
       expoPushReason: expoResult.reason,
+
       expoDevicesSent: expoResult.sentCount || 0,
+      expoDevicesFailed: expoResult.failedCount || 0,
+      expoTotalDevices: expoResult.totalTokens || 0,
+      expoInvalidTokensRemoved: expoResult.invalidTokensRemoved || 0,
     });
   } catch (error) {
     console.error("Send notification API error:", error);
@@ -349,7 +473,10 @@ export async function POST(request) {
       {
         success: false,
         message: "Internal server error",
-        error: error.message,
+        error:
+          process.env.NODE_ENV === "development"
+            ? error.message
+            : undefined,
       },
       { status: 500 }
     );
