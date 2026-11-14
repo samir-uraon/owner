@@ -3617,8 +3617,8 @@ async function sendPatientNotification(customer) {
     disabled={
       Boolean(updatingCustomerId) ||
       Boolean(updatingSessionId) ||
-      notifyingCustomerId === customer._id
-      || !webPushEnabled || !expoPushEnabled
+      notifyingCustomerId === customer._id ||
+  (!webPushEnabled && !expoPushEnabled)
     }
     className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 shadow-sm transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto"
   >
