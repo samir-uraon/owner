@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { signOut } from "next-auth/react";
+import { signOut} from "next-auth/react";
 import {
   Activity,
   AlertCircle,
@@ -39,6 +39,7 @@ import {
 import Image from "next/image";
 import { toast } from "react-toastify";
 import GoUpButton from "../goToUpButton";
+ 
 
 const API = {
   schedule: "/api/team/schedule",
@@ -1808,6 +1809,7 @@ function InfoItem({ label, value }) {
 }
 
 export default function TeamDashboard({ role = "staff" }) {
+
   const isDoctor = role === "doctor";
 
   const [activeView, setActiveView] = useState("overview");
@@ -4605,6 +4607,7 @@ async function sendPatientNotification(customer) {
             <p>© {new Date().getFullYear()} Zeriy. All rights reserved.</p>
             <p>Made Simpler & Much Faster</p>
           </footer>
+
         </main>
       </div>
       <GoUpButton />

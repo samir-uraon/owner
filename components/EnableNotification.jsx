@@ -89,6 +89,11 @@ function getBrowserSupport() {
 
 function requestNativePushToken() {
   return new Promise((resolve, reject) => {
+    if (!window.ReactNativeWebView?.postMessage) {
+      reject(new Error("Native app bridge is unavailable."));
+      return;
+    }
+
     const timeout = setTimeout(() => {
       window.removeEventListener(
         "ZERIY_PUSH_TOKEN",
@@ -96,9 +101,7 @@ function requestNativePushToken() {
       );
 
       reject(
-        new Error(
-          "Mobile notification registration timed out."
-        )
+        new Error("Mobile notification registration timed out.")
       );
     }, 30000);
 
@@ -126,6 +129,7 @@ function requestNativePushToken() {
 
 export default function EnableNotifications({
   webPushEnabled = false,
+  expoPushEnabled = false,
   updateSession,
 }) {
   const {
@@ -137,29 +141,42 @@ export default function EnableNotifications({
   const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);
   const [message, setMessage] = useState("");
-  const [nativeEnabled, setNativeEnabled] = useState(false);
 
   const syncSession = updateSession || update;
+
+  // ==========================================
+  // DEVICE DETECTION
+  // ==========================================
 
   const isNativeApp =
     typeof window !== "undefined" &&
     Boolean(window.ReactNativeWebView?.postMessage);
 
-  // Use the correct subscription status for each platform.
-  const sessionEnabled = isNativeApp
-    ? Boolean(
-        session?.user?.expoPushEnabled ?? nativeEnabled
-      )
-    : Boolean(
-        session?.user?.webPushEnabled ?? webPushEnabled
-      );
+  // ==========================================
+  // OWNER ROLE CHECK
+  // ==========================================
+
+const isAllowedRole = session?.user?.role !== "owner";
 
   // ==========================================
-  // SHOW / HIDE BANNER
+  // DEVICE-SPECIFIC NOTIFICATION STATUS
+  // ==========================================
+
+  const sessionEnabled = isNativeApp
+    ? session?.user?.expoPushEnabled === true
+    : session?.user?.webPushEnabled === true;
+
+  // ==========================================
+  // SHOW / HIDE NOTIFICATION BANNER
+  // OWNER ONLY
   // ==========================================
 
   useEffect(() => {
-    if (status !== "authenticated" || !session?.user) {
+    if (
+      status !== "authenticated" ||
+      !session?.user ||
+      !isAllowedRole
+    ) {
       setVisible(false);
       return;
     }
@@ -177,6 +194,7 @@ export default function EnableNotifications({
   }, [
     status,
     session?.user,
+      isAllowedRole,
     sessionEnabled,
   ]);
 
@@ -185,16 +203,13 @@ export default function EnableNotifications({
   // ==========================================
 
   const updateServerSession = useCallback(
-    async (value) => {
+    async (field, value) => {
       try {
         await syncSession({
-          webPushEnabled: value,
+          [field]: value,
         });
       } catch (error) {
-        console.error(
-          "Session update error:",
-          error
-        );
+        console.error("Session update error:", error);
       }
     },
     [syncSession]
@@ -211,9 +226,12 @@ export default function EnableNotifications({
 
       if (
         status !== "authenticated" ||
-        !session?.user
+        !session?.user ||
+        !isAllowedRole
       ) {
-        throw new Error("Please login first.");
+        throw new Error(
+          "Only owners can enable notifications."
+        );
       }
 
       // ======================================
@@ -229,7 +247,6 @@ export default function EnableNotifications({
           );
         }
 
-        // Save native token to MongoDB.
         const response = await fetch(
           "/api/notifications/native-subscribe",
           {
@@ -239,15 +256,11 @@ export default function EnableNotifications({
             },
             credentials: "same-origin",
             cache: "no-store",
-            body: JSON.stringify({
-              token,
-            }),
+            body: JSON.stringify({ token }),
           }
         );
 
-        const data = await response
-          .json()
-          .catch(() => ({}));
+        const data = await response.json().catch(() => ({}));
 
         if (!response.ok || !data.success) {
           throw new Error(
@@ -256,7 +269,8 @@ export default function EnableNotifications({
           );
         }
 
-        setNativeEnabled(true);
+        await updateServerSession("expoPushEnabled", true);
+
         setMessage("");
         setVisible(false);
 
@@ -264,7 +278,7 @@ export default function EnableNotifications({
       }
 
       // ======================================
-      // EXISTING WEBSITE WEB PUSH
+      // WEBSITE WEB PUSH
       // ======================================
 
       const unsupported = getBrowserSupport();
@@ -277,20 +291,16 @@ export default function EnableNotifications({
         process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim();
 
       if (!publicKey) {
-        throw new Error(
-          "VAPID public key is missing."
-        );
+        throw new Error("VAPID public key is missing.");
       }
 
       const applicationServerKey =
         urlBase64ToUint8Array(publicKey);
 
-      // Request notification permission.
       let permission = Notification.permission;
 
       if (permission === "default") {
-        permission =
-          await Notification.requestPermission();
+        permission = await Notification.requestPermission();
       }
 
       if (permission !== "granted") {
@@ -305,22 +315,17 @@ export default function EnableNotifications({
         );
       }
 
-      // Register service worker.
       await navigator.serviceWorker.register(
         "/sw.js",
-        {
-          scope: "/",
-        }
+        { scope: "/" }
       );
 
       const registration =
         await navigator.serviceWorker.ready;
 
-      // Get existing subscription.
       let subscription =
         await registration.pushManager.getSubscription();
 
-      // Check existing VAPID key.
       if (subscription) {
         const existingKey =
           subscription.options?.applicationServerKey;
@@ -341,7 +346,6 @@ export default function EnableNotifications({
         }
       }
 
-      // Create subscription if required.
       if (!subscription) {
         subscription =
           await registration.pushManager.subscribe({
@@ -350,7 +354,6 @@ export default function EnableNotifications({
           });
       }
 
-      // Save Web Push subscription to MongoDB.
       const response = await fetch(
         "/api/notifications/subscribe",
         {
@@ -360,15 +363,11 @@ export default function EnableNotifications({
           },
           credentials: "same-origin",
           cache: "no-store",
-          body: JSON.stringify(
-            subscription.toJSON()
-          ),
+          body: JSON.stringify(subscription.toJSON()),
         }
       );
 
-      const data = await response
-        .json()
-        .catch(() => ({}));
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok || !data.success) {
         throw new Error(
@@ -377,8 +376,7 @@ export default function EnableNotifications({
         );
       }
 
-      // Update session after successful subscription.
-      await updateServerSession(true);
+      await updateServerSession("webPushEnabled", true);
 
       setMessage("");
       setVisible(false);
@@ -398,12 +396,13 @@ export default function EnableNotifications({
   }
 
   // ==========================================
-  // AUTHENTICATION CHECK
+  // AUTHENTICATION AND ROLE CHECK
   // ==========================================
 
   if (
     status !== "authenticated" ||
     !session?.user ||
+      !isAllowedRole||
     sessionEnabled
   ) {
     return null;
@@ -414,87 +413,77 @@ export default function EnableNotifications({
   // ==========================================
 
   return (
-    <div
-      className={`fixed left-1/2 top-3 z-[9999] w-[calc(100%-24px)] max-w-md -translate-x-1/2 transition-all duration-500 ease-out ${
-        visible
-          ? "translate-y-0 opacity-100"
-          : "-translate-y-[150%] opacity-0 pointer-events-none"
-      }`}
-    >
-      <div className="relative overflow-hidden rounded-2xl border border-violet-100 bg-white p-3.5 shadow-xl shadow-violet-900/10 sm:p-4">
+   
+      <div
+        className={`fixed left-1/2 top-3 z-[9999] w-[calc(100%-24px)] max-w-md -translate-x-1/2 transition-all duration-500 ease-out ${
+          visible
+            ? "translate-y-0 opacity-100"
+            : "-translate-y-[150%] opacity-0 pointer-events-none"
+        }`}
+      >
+        <div className="relative overflow-hidden rounded-2xl border border-violet-100 bg-white p-3.5 shadow-xl shadow-violet-900/10 sm:p-4">
 
-        {/* Top accent */}
+          <div className="flex items-center gap-3">
 
-        <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+              <Bell size={21} />
+            </div>
 
-          {/* Icon */}
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold text-gray-900">
+                Stay updated with Zeriy
+              </p>
 
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
-            <Bell size={21} />
+              <p className="mt-0.5 text-xs leading-relaxed text-gray-500">
+                Enable notifications to receive booking and queue updates.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setVisible(false)}
+              disabled={loading}
+              aria-label="Dismiss notification prompt"
+              className="absolute right-2 top-2 rounded-lg p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700"
+            >
+              <X size={16} />
+            </button>
           </div>
 
-          {/* Content */}
-
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-gray-900">
-              Stay updated with Zeriy
+          {message && (
+            <p
+              role="alert"
+              className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600"
+            >
+              {message}
             </p>
-
-            <p className="mt-0.5 text-xs leading-relaxed text-gray-500">
-              Enable notifications to receive booking and queue updates.
-            </p>
-          </div>
-
-          {/* Close */}
+          )}
 
           <button
             type="button"
-            onClick={() => setVisible(false)}
+            onClick={enableNotifications}
             disabled={loading}
-            aria-label="Dismiss notification prompt"
-            className="absolute right-2 top-2 rounded-lg p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <X size={16} />
+            {loading ? (
+              <LoaderCircle
+                size={17}
+                className="animate-spin"
+              />
+            ) : (
+              <ShieldCheck size={17} />
+            )}
+
+            {loading
+              ? "Enabling..."
+              : "Enable Notifications"}
           </button>
-        </div>
 
-        {/* Error message */}
-
-        {message && (
-          <p
-            role="alert"
-            className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600"
-          >
-            {message}
+          <p className="mt-2 text-center text-[9px] text-gray-400">
+            You can manage notification permissions anytime in your device settings.
           </p>
-        )}
-
-        {/* Enable button */}
-
-        <button
-          type="button"
-          onClick={enableNotifications}
-          disabled={loading}
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {loading ? (
-            <LoaderCircle
-              size={17}
-              className="animate-spin"
-            />
-          ) : (
-            <ShieldCheck size={17} />
-          )}
-
-          {loading
-            ? "Enabling..."
-            : "Enable Notifications"}
-        </button>
-
-        <p className="mt-2 text-center text-[9px] text-gray-400">
-          You can manage notification permissions anytime in your device settings.
-        </p>
+        </div>
       </div>
-    </div>
+   
   );
 }

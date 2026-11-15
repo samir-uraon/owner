@@ -8,7 +8,7 @@ import clientPromise from "@/lib/mongodb";
 
  
 const ROLE_COLLECTIONS = {
-  owner: "owners",
+ 
   doctor: "team",
   staff: "team",
 };

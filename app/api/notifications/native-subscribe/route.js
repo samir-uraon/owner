@@ -11,7 +11,6 @@ export const revalidate = 0;
 
 const ROLE_COLLECTIONS = {
   user: "users",
-  owner: "owners",
   doctor: "team",
   staff: "team",
 };

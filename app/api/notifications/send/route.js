@@ -49,13 +49,11 @@ function isValidExpoToken(token) {
 
 // ==========================================
 // REMOVE INVALID EXPO TOKENS
-// Supports both string and object token formats
 // ==========================================
 
 async function removeInvalidExpoTokens(users, recipient, invalidTokens) {
   if (!invalidTokens.length) return;
 
-  // Remove tokens stored as strings.
   await users.updateOne(
     { _id: recipient._id },
     {
@@ -65,7 +63,6 @@ async function removeInvalidExpoTokens(users, recipient, invalidTokens) {
     }
   );
 
-  // Remove tokens stored as objects: { token: "..." }.
   await users.updateOne(
     { _id: recipient._id },
     {
@@ -122,7 +119,6 @@ async function sendExpoPush(users, recipient, notification) {
   let failedCount = 0;
 
   try {
-    // Expo accepts batches of up to 100 messages.
     for (let i = 0; i < tokens.length; i += 100) {
       const batch = tokens.slice(i, i + 100);
 
@@ -173,7 +169,6 @@ async function sendExpoPush(users, recipient, notification) {
 
       tickets.forEach((ticket, index) => {
         if (ticket?.status === "ok") {
-          // Expo accepted the notification request.
           sentCount++;
         } else {
           failedCount++;
@@ -185,14 +180,11 @@ async function sendExpoPush(users, recipient, notification) {
         }
       });
 
-      // If Expo returned fewer tickets than messages,
-      // count the missing responses as failures.
       if (tickets.length < batch.length) {
         failedCount += batch.length - tickets.length;
       }
     }
 
-    // Remove expired device tokens.
     if (invalidTokens.length > 0) {
       await removeInvalidExpoTokens(
         users,
@@ -283,7 +275,6 @@ async function sendWebPush(users, recipient, notification) {
   } catch (error) {
     console.error("Web Push delivery error:", error);
 
-    // Remove expired subscriptions.
     if (error.statusCode === 404 || error.statusCode === 410) {
       await users.updateOne(
         {
@@ -310,6 +301,41 @@ async function sendWebPush(users, recipient, notification) {
 }
 
 // ==========================================
+// GET MOST RECENT NOTIFICATION PREFERENCE
+// ==========================================
+
+function getLatestNotificationType(recipient) {
+  const webTime = recipient.webPushUpdatedAt
+    ? new Date(recipient.webPushUpdatedAt).getTime()
+    : 0;
+
+  const expoTime = recipient.expoPushUpdatedAt
+    ? new Date(recipient.expoPushUpdatedAt).getTime()
+    : 0;
+
+  // Invalid or missing timestamps are treated as oldest.
+  const validWebTime = Number.isFinite(webTime) ? webTime : 0;
+  const validExpoTime = Number.isFinite(expoTime) ? expoTime : 0;
+
+  // If both timestamps are equal, do not send.
+  if (validWebTime === validExpoTime) {
+    return null;
+  }
+
+  if (validWebTime > validExpoTime) {
+    return {
+      type: "web",
+      enabled: recipient.webPushEnabled === true,
+    };
+  }
+
+  return {
+    type: "expo",
+    enabled: recipient.expoPushEnabled === true,
+  };
+}
+
+// ==========================================
 // POST API
 // ==========================================
 
@@ -328,7 +354,7 @@ export async function POST(request) {
       );
     }
 
-    const allowedRoles = ["owner", "staff", "doctor"];
+    const allowedRoles = [ "staff", "doctor"];
 
     if (!allowedRoles.includes(session.user.role)) {
       return NextResponse.json(
@@ -433,11 +459,49 @@ export async function POST(request) {
       notificationId,
     };
 
-    // 6. Send Web Push and Expo Push independently.
-    const [webResult, expoResult] = await Promise.all([
-      sendWebPush(users, recipient, pushNotification),
-      sendExpoPush(users, recipient, pushNotification),
-    ]);
+    // ==========================================
+    // 6. SELECT ONLY THE MOST RECENT SETTING
+    // ==========================================
+
+    const latestPreference = getLatestNotificationType(recipient);
+
+    let webResult = {
+      sent: false,
+      reason: "Web Push not selected",
+    };
+
+    let expoResult = {
+      sent: false,
+      sentCount: 0,
+      failedCount: 0,
+      totalTokens: 0,
+      reason: "Expo Push not selected",
+    };
+
+    let selectedPushType = latestPreference?.type || null;
+
+    if (latestPreference?.enabled === true) {
+      if (latestPreference.type === "web") {
+        webResult = await sendWebPush(
+          users,
+          recipient,
+          pushNotification
+        );
+      } else if (latestPreference.type === "expo") {
+        expoResult = await sendExpoPush(
+          users,
+          recipient,
+          pushNotification
+        );
+      }
+    } else {
+      const reason = latestPreference
+        ? `Latest ${latestPreference.type} notification preference is disabled`
+        : "Notification timestamps are missing or equal";
+
+      webResult.reason = reason;
+      expoResult.reason = reason;
+    }
 
     const webPushSent = webResult.sent === true;
     const expoPushSent = expoResult.sent === true;
@@ -448,13 +512,16 @@ export async function POST(request) {
     return NextResponse.json({
       success: true,
       notificationSaved: true,
+
       pushSent,
       webPushSent,
       expoPushSent,
 
+      selectedPushType,
+
       message: pushSent
-        ? "Notification saved and push request accepted"
-        : "Notification saved, but push delivery was unsuccessful",
+        ? `${selectedPushType} notification accepted`
+        : "Notification saved, but no push notification was sent",
 
       notificationId,
 
