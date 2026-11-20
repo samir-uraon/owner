@@ -15,6 +15,7 @@ import {
   ShieldAlert,
   Phone,
   LogIn,
+  User,
 } from "lucide-react";
 import Image from "next/image";
  
@@ -187,7 +188,7 @@ const handleContinue = useCallback(() => {
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 font-sans">
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-4 sm:px-6">
+      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4 sm:px-6">
        
   
 <div className="flex gap-2">
@@ -208,12 +209,12 @@ const handleContinue = useCallback(() => {
  
        
 </div>
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-5 sm:gap-3">
           <div className="relative">
             <button
               type="button"
               onClick={() => setIsProfileOpen((prev) => !prev)}
-              className="flex items-center gap-2 rounded-full p-1 transition hover:bg-white"
+              className="flex items-center gap-2 rounded-full p-1 transition hover:bg-gray-300 bg-gray-200"
               aria-expanded={isProfileOpen}
               aria-haspopup="true"
               aria-label="Open profile menu"
@@ -223,78 +224,84 @@ const handleContinue = useCallback(() => {
               </div>
               <ChevronDown
                 size={15}
-                className={`text-slate-500 transition-transform ${
+                className={`text-slate-500 mr-2 transition-transform ${
                   isProfileOpen ? "rotate-180" : ""
                 }`}
               />
             </button>
 
-            {isProfileOpen && (
-              <>
-                <button
-                  type="button"
-                  aria-label="Close profile menu"
-                  className="fixed inset-0 z-40 cursor-default"
-                  onClick={() => setIsProfileOpen(false)}
-                />
+    {isProfileOpen && (
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-40 cursor-default"
+              aria-label="Close account menu"
+              onClick={() => setIsProfileOpen(false)}
+            />
 
-                <div className="absolute right-0 z-50 mt-2 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white py-2 shadow-xl">
-                  <div className="border-b border-slate-100 px-4 py-3">
-                    <p className="truncate text-sm font-semibold text-slate-900">
-                      {userName}
-                    </p>
-                    <p className="mt-1 truncate text-xs text-slate-500">
-                      {session.user.email || "No email available"}
-                    </p>
-                    <p className="mt-1 flex items-center gap-1 truncate text-xs text-slate-500">
-                      <Phone size={13} className="shrink-0" />
-                      {session.user.phone ||
-                        session.user.mobile ||
-                        "No mobile number added"}
-                    </p>
-                    <span className="mt-2 inline-flex rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-indigo-600">
-                      Business Owner
-                    </span>
-                  </div>
+            <div className="absolute right-0 z-50 mt-2 w-[min(18rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white p-2  shadow-slate-200/60 sm:mt-3">
+              <div className="border-b border-slate-100 px-3 py-3">
+                <p className="truncate text-sm font-bold text-slate-900">
+                  {userName}
+                </p>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsProfileOpen(false);
-                      router.push("/owner/dashboard");
-                    }}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-100"
-                  >
-                    <Settings size={16} />
-                    Dashboard
-                  </button>
-<button
-                    type="button"
-                    onClick={() => {
-                      setIsProfileOpen(false);
-                      router.push("/signin");
-                    }}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-100"
-                  >
-                    <LogIn size={16} />
-                    Signin
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    disabled={loggingOut}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {loggingOut ? (
-                      <LoaderCircle size={16} className="animate-spin" />
-                    ) : (
-                      <LogOut size={16} />
-                    )}
-                    {loggingOut ? "Logging out..." : "Logout"}
-                  </button>
-                </div>
-              </>
-            )}
+                <p className="mt-1 truncate text-xs text-slate-500">
+                  {session?.user?.email || "No email available"}
+                </p>
+
+                <p className="mt-1 flex items-center gap-1.5 truncate text-xs text-slate-500">
+                  <Phone size={13} className="shrink-0" />
+                  {session?.user?.phone ||
+                    session?.user?.mobile ||
+                    "No mobile number"}
+                </p>
+
+                <span className="mt-3 inline-flex rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+                  Business Owner
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsProfileOpen(false);
+                  router.push("/owner/dashboard");
+                }}
+                className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-slate-700 transition hover:bg-amber-100"
+              >
+                <User size={17} />
+              Dashboard
+              </button>
+
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsProfileOpen(false);
+                  router.push("/signin");
+                }}
+                className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-slate-700 transition hover:bg-slate-200"
+              >
+                <LogIn size={17} />
+                Sign in
+              </button>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={loggingOut}
+                className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-red-600 transition hover:bg-red-100 disabled:opacity-60"
+              >
+                {loggingOut ? (
+                  <LoaderCircle size={17} className="animate-spin" />
+                ) : (
+                  <LogOut size={17} />
+                )}
+                {loggingOut ? "Signing out..." : "Sign out"}
+              </button>
+            </div>
+          </>
+        )}
           </div>
         </div>
       </header>

@@ -16,7 +16,7 @@ import {
   AlertCircle,
   ShieldCheck,
 } from "lucide-react";
-import { toast } from "react-toastify";
+import { toast } from "react-hot-toast";
 
 const MOBILE_REGEX = /^[6-9]\d{9}$/;
 const PROFILE_CACHE_TTL = 30 * 1000;
@@ -524,14 +524,14 @@ export default function OwnerEditProfilePage() {
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-3xl">
-        <button
-          type="button"
-          onClick={() => router.push("/owner/dashboard")}
-          className="mb-6 inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-white hover:text-indigo-600"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to dashboard
-        </button>
+      <button
+  type="button"
+  onClick={() => router.push("/owner/dashboard")}
+  className="mb-6 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+>
+  <ArrowLeft className="h-4 w-4" />
+  Back
+</button>
 
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
           <div className="bg-indigo-600 px-6 py-8 text-white sm:px-9">
@@ -679,30 +679,32 @@ export default function OwnerEditProfilePage() {
               </p>
             </div>
 
-            <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-6 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => router.push("/owner/dashboard")}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <X className="h-4 w-4" />
-                Cancel
-              </button>
+          <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-6 sm:flex-row sm:justify-end">
+  {hasChanges && (
+    <button
+      type="button"
+      onClick={() => router.push("/owner/dashboard")}
+      className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+    >
+      <X className="h-4 w-4" />
+      Cancel
+    </button>
+  )}
 
-              <button
-                type="submit"
-                disabled={saveDisabled}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-              >
-                {saving ? (
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="h-4 w-4" />
-                )}
+  <button
+    type="submit"
+    disabled={saveDisabled}
+    className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+  >
+    {saving ? (
+      <LoaderCircle className="h-4 w-4 animate-spin" />
+    ) : (
+      <Save className="h-4 w-4" />
+    )}
 
-                {saving ? "Saving..." : "Save changes"}
-              </button>
-            </div>
+    {saving ? "Saving..." : "Save changes"}
+  </button>
+</div>
 
             <p className="text-center text-xs text-slate-400">
               Save becomes available when you make a valid change.

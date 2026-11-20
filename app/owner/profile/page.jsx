@@ -11,7 +11,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useSession } from "next-auth/react";
-import { toast } from "react-toastify";
+import { toast } from "react-hot-toast";
 import {
   ArrowLeft,
   MapPin,

@@ -15,7 +15,7 @@ import {
   UserRound,
   Phone,
 } from "lucide-react";
-import { toast } from "react-toastify";
+import { toast } from "react-hot-toast";
 import GoogleAuthButton from "./GoogleAuthButton";
 import Image from "next/image";
 

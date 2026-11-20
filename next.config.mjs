@@ -8,9 +8,8 @@ const nextConfig = {
  
   reactCompiler: true,
 
-  allowedDevOrigins: [
-    "10.70.226.117",
-  ],
+  allowedDevOrigins: ['172.18.1.120'],
+  
   turbopack: {
     rules: {
       "*.css": {

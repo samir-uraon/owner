@@ -35,6 +35,8 @@ import {
   VenusAndMars,
   Clock,
   Bell,
+  Briefcase,
+  Store,
 } from "lucide-react";
 import Image from "next/image";
 import { toast } from "react-toastify";
@@ -2901,7 +2903,7 @@ async function sendPatientNotification(customer) {
               width={42}
               height={42}
               priority
-              className="h-9 w-9 shrink-0 rounded-lg object-contain sm:h-10 sm:w-10 sm:rounded-xl"
+              className="h-11 w-11 shrink-0 rounded-lg object-contain sm:h-10 sm:w-10 sm:rounded-xl"
             />
 
             <div className="min-w-0">
@@ -2924,8 +2926,8 @@ async function sendPatientNotification(customer) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-3 scrollbar-none">
-          <p className="px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+        <div className="flex-1 overflow-y-auto px-4 py-4 scrollbar-none">
+          <p className="px-3 text-[13px] md:text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
             MENU
           </p>
 
@@ -2940,10 +2942,10 @@ async function sendPatientNotification(customer) {
                   type="button"
                   onClick={() => navigate(item.id)}
                   aria-current={active ? "page" : undefined}
-                  className={`group relative flex min-h-11 w-full items-center gap-3 rounded-xl px-3.5 py-3 text-left text-[13px] font-semibold transition-all duration-200 ${
+                  className={`group relative flex min-h-11 w-full items-center gap-3 rounded-xl px-3.5 py-3 text-left text-[15px] md:text-[12px] font-semibold transition-all duration-200 ${
                     active
                       ? "bg-violet-50 text-violet-700"
-                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                   }`}
                 >
                   {active && (
@@ -2951,14 +2953,14 @@ async function sendPatientNotification(customer) {
                   )}
 
                   <Icon
-                    size={19}
-                    strokeWidth={active ? 2.2 : 1.8}
-                    className={`shrink-0 ${
-                      active
-                        ? "text-violet-600"
-                        : "text-slate-400 transition group-hover:text-slate-600"
-                    }`}
-                  />
+  size={undefined}
+  strokeWidth={active ? 2.2 : 1.8}
+  className={`h-[23px] w-[23px] shrink-0 md:h-6 md:w-6 ${
+    active
+      ? "text-violet-600"
+      : "text-slate-400 transition group-hover:text-slate-600"
+  }`}
+/>
 
                   <span className="min-w-0 flex-1">{item.label}</span>
 
@@ -2971,58 +2973,70 @@ async function sendPatientNotification(customer) {
           </nav>
 
           <div className="mt-8">
-            <p className="px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+            <p className="px-3 text-[14px] md:text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">
               ACCOUNT
             </p>
 
-            <div className="mt-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-violet-100 text-violet-700">
-                  {profile?.profileImage ? (
-                    <img
-                      src={profile.profileImage}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <UserRound size={20} />
-                  )}
-                </div>
+        
+<div className="mt-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3">
+  <div className="flex min-w-0 items-center gap-3">
+  
+<div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-violet-100 text-violet-700">
+  {profile?.profileImage ? (
+    <img
+      src={profile.profileImage}
+      alt=""
+      className="h-full w-full object-cover"
+    />
+  ) : (
+    <UserRound
+      size={undefined}
+      className="h-[30px] w-[30px] md:h-5 md:w-5"
+    />
+  )}
+</div>
 
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold text-slate-900">
-                    {profile?.name || `${roleLabel} account`}
-                  </p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    {profile?.email || roleLabel}
-                  </p>
-                </div>
-              </div>
+<div className="min-w-0 flex-1">
+  <p className="truncate text-[15px] font-bold text-slate-900 md:text-base">
+    {profile?.name || `${roleLabel} account`}
+  </p>
+  <p className="mt-0.5 truncate text-[13px] text-slate-500 md:text-xs">
+    {profile?.email || roleLabel}
+  </p>
+</div>
 
-              {profile?.businessName && (
-                <div className="mt-3 flex items-start gap-2 border-t border-slate-200/80 pt-3">
-                  <BriefcaseMedical
-                    size={14}
-                    className="mt-0.5 shrink-0 text-violet-500"
-                  />
-                  <p className="break-words text-xs leading-5 text-slate-600">
-                    {profile.businessName}
-                  </p>
-                </div>
-              )}
+  </div>
 
-              <button
-                type="button"
-                onClick={() => navigate("profile")}
-                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 transition hover:border-violet-200 hover:text-violet-700"
-              >
-                <Pencil size={13} />
-                Manage profile
-                <ArrowRight size={13} className="ml-auto" />
-              </button>
-            </div>
-          </div>
-        </div>
+{profile?.businessName && (
+  <div className="mt-3 flex items-start gap-2 border-t border-slate-200/80 pt-3">
+    <Store
+      size={undefined}
+      className="-mt-1 h-[25px] w-[25px] shrink-0 text-violet-500 md:h-6 md:w-6"
+    />
+    <p className="break-words text-[14px] leading-5 text-slate-600 md:text-[11px]">
+      {profile.businessName}
+    </p>
+  </div>
+)}
+
+  <button
+    type="button"
+    onClick={() => navigate("profile")}
+    className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[13px] md:text-[11px] font-semibold text-slate-700 transition hover:border-violet-200 hover:text-violet-700"
+  >
+    <Pencil
+      size={undefined}
+      className="h-[20px] w-[20px] md:h-5 md:w-5"
+    />
+    Manage Profile
+    <ArrowRight
+      size={undefined}
+      className="ml-auto h-[20px] w-[20px] md:h-5 md:w-5"
+    />
+  </button>
+</div>
+</div>
+</div>
 
         <div className="shrink-0 border-t border-slate-100 bg-white py-2 px-4">
           <button
@@ -3043,7 +3057,7 @@ async function sendPatientNotification(customer) {
 
       <div className="min-h-screen lg:pl-[260px]">
         <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
-          <div className="flex h-[68px] items-center justify-between gap-3 px-4 sm:px-6 lg:h-[69px] lg:px-8">
+          <div className="flex h-[68px] items-center justify-between gap-3 px-5 sm:px-6 lg:h-[69px] lg:px-8">
             <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
@@ -3051,11 +3065,14 @@ async function sendPatientNotification(customer) {
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-50 lg:hidden"
                 aria-label="Open navigation"
               >
-                <Menu size={20} />
+              <Menu
+  size={undefined}
+  className="h-[24px] w-[24px] md:h-5 md:w-5"
+/>
               </button>
 
               <div className="min-w-0">
-                <p className="truncate text-sm font-bold text-slate-900 sm:text-base">
+                <p className="truncate text-xl font-bold text-slate-900 sm:text-xl">
                   {activeView === "overview"
                     ? "Overview"
                     : activeView === "bookings"
@@ -3080,7 +3097,7 @@ async function sendPatientNotification(customer) {
                 aria-label="Book for Patient"
                 className="group relative flex h-9 w-9 sm:w-auto items-center justify-center gap-1.5 rounded-xl bg-violet-600 px-0 sm:px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-violet-700"
               >
-                <Plus size={16} />
+              <Plus className="h-[23px] w-[23px] md:h-5 md:w-5" />
                 <span className="hidden sm:inline">Book for Patient</span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 sm:hidden">
                   Book for Patient
@@ -3095,14 +3112,14 @@ async function sendPatientNotification(customer) {
                 aria-label="Refresh dashboard"
                 className="group relative flex h-9 w-9 sm:w-auto items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-0 sm:px-3 text-sm font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50"
               >
-                <RefreshCw
-                  size={16}
-                  className={
-                    refreshing || loadingSchedule || loadingCustomers
-                      ? "animate-spin"
-                      : ""
-                  }
-                />
+              <RefreshCw
+  size={undefined}
+  className={`h-[20px] w-[20px] md:h-5 md:w-5 ${
+    refreshing || loadingSchedule || loadingCustomers
+      ? "animate-spin"
+      : ""
+  }`}
+/>
                 <span className="hidden sm:inline">Refresh</span>
                 <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 whitespace-nowrap rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 sm:hidden">
                   Refresh dashboard
@@ -4603,10 +4620,17 @@ async function sendPatientNotification(customer) {
             </div>
           )}
 
-          <footer className="flex flex-col gap-2 border-t border-slate-200/80 py-4 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
-            <p>© {new Date().getFullYear()} Zeriy. All rights reserved.</p>
-            <p>Made Simpler & Much Faster</p>
-          </footer>
+<footer className="flex flex-row items-center justify-between gap-4 border-t border-slate-200/80 py-5 text-xs text-slate-500">
+  <p className="text-left">
+    © {new Date().getFullYear()}{" "}
+    <span className="font-semibold text-slate-700">Zeriy</span>.
+    All rights reserved.
+  </p>
+
+  <p className="text-right font-medium tracking-wide">
+    Made Simpler <span className="text-indigo-500">&</span> Much Faster
+  </p>
+</footer>
 
         </main>
       </div>
